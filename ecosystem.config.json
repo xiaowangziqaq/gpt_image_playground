@@ -1,0 +1,32 @@
+{
+  "apps": [
+    {
+      "name": "gpt-image-frontend",
+      "script": "npx",
+      "args": "vite preview --host 0.0.0.0 --port 5173",
+      "cwd": "./",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "1G",
+      "env": {
+        "NODE_ENV": "production"
+      }
+    },
+    {
+      "name": "gpt-image-auth-server",
+      "script": "scripts/auth-server.mjs",
+      "cwd": "./",
+      "instances": 1,
+      "autorestart": true,
+      "watch": false,
+      "max_memory_restart": "500M",
+      "env": {
+        "NODE_ENV": "production",
+        "AUTH_API_PORT": "2166",
+        "AUTH_API_HOST": "127.0.0.1",
+        "AUTH_DATA_DIR": "./data"
+      }
+    }
+  ]
+}
