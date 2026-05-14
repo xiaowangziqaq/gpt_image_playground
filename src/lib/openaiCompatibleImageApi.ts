@@ -17,6 +17,7 @@ import {
   normalizeBase64Image,
   pickActualParams,
 } from './imageApiShared'
+import { createSessionHeaders } from './auth'
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 
@@ -79,6 +80,13 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
   return {
     Authorization: `Bearer ${profile.apiKey}`,
+  }
+}
+
+function withSessionHeaders(headers: Record<string, string>, sessionToken: string | null | undefined): Record<string, string> {
+  return {
+    ...headers,
+    ...createSessionHeaders(sessionToken),
   }
 }
 
@@ -276,7 +284,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
-  const requestHeaders = createRequestHeaders(profile)
+  const requestHeaders = withSessionHeaders(createRequestHeaders(profile), opts.sessionToken)
   const paths = createOpenAICompatiblePaths(customProvider)
 
   const controller = new AbortController()
@@ -543,7 +551,7 @@ async function extractCustomImages(payload: unknown, result: CustomProviderResul
 
 async function submitCustomRequest(mapping: CustomProviderSubmitMapping, opts: CallApiOptions, profile: ApiProfile, controller: AbortController): Promise<unknown> {
   const proxyConfig = readClientDevProxyConfig()
-  const requestHeaders = createRequestHeaders(profile)
+  const requestHeaders = withSessionHeaders(createRequestHeaders(profile), opts.sessionToken)
   const context = createCustomProviderContext(opts, profile)
   const method = mapping.method ?? 'POST'
   const contentType = mapping.contentType ?? 'json'
@@ -589,10 +597,11 @@ async function pollCustomTaskResult(
   poll: CustomProviderPollMapping,
   taskId: string,
   mime: string,
+  sessionToken?: string | null,
   signal?: AbortSignal,
 ): Promise<CallApiResult> {
   const proxyConfig = readClientDevProxyConfig()
-  const requestHeaders = createRequestHeaders(profile)
+  const requestHeaders = withSessionHeaders(createRequestHeaders(profile), sessionToken)
   let isFirstPoll = true
 
   while (true) {
@@ -676,7 +685,7 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
       clearTimeout(timeoutId)
       timeoutId = null
     }
-    return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal)
+    return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, opts.sessionToken, controller.signal)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }
@@ -722,7 +731,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
-  const requestHeaders = createRequestHeaders(profile)
+  const requestHeaders = withSessionHeaders(createRequestHeaders(profile), opts.sessionToken)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
 

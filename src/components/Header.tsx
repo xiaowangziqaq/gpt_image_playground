@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useStore } from '../store'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
@@ -19,14 +19,30 @@ function isInstalledPwa() {
 export default function Header() {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const currentUser = useStore((s) => s.currentUser)
+  const logout = useStore((s) => s.logout)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
   const [showHelp, setShowHelp] = useState(false)
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isPwaInstalled, setIsPwaInstalled] = useState(isInstalledPwa)
+  const [showDecrementAnimation, setShowDecrementAnimation] = useState(false)
+  const prevRemainingRef = useRef<number | null | undefined>(null)
 
   const installTooltip = useTooltip()
   const helpTooltip = useTooltip()
   const settingsTooltip = useTooltip()
+
+  useEffect(() => {
+    const currentRemaining = currentUser?.role !== 'admin' ? currentUser?.remainingGenerations : null
+    if (prevRemainingRef.current !== null && currentRemaining !== null && prevRemainingRef.current !== currentRemaining) {
+      if (typeof prevRemainingRef.current === 'number' && typeof currentRemaining === 'number' && currentRemaining < prevRemainingRef.current) {
+        setShowDecrementAnimation(true)
+        const timer = setTimeout(() => setShowDecrementAnimation(false), 1000)
+        return () => clearTimeout(timer)
+      }
+    }
+    prevRemainingRef.current = currentRemaining
+  }, [currentUser?.remainingGenerations, currentUser?.role])
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
@@ -91,14 +107,9 @@ export default function Header() {
         <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex-1 min-w-0 pr-2">
             <h1 className="inline-flex items-start relative">
-              <a
-                href="https://github.com/CookSleep/gpt_image_playground"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              >
+              <span className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100">
                 GPT Image Playground
-              </a>
+              </span>
               {hasUpdate && latestRelease && (
                 <a
                   href={latestRelease.url}
@@ -114,36 +125,29 @@ export default function Header() {
             </h1>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {!isPwaInstalled && (
-              <div
-                className="relative"
-                {...installTooltip.handlers}
-              >
-                <button
-                  onClick={() => {
-                    dismissAllTooltips()
-                    handleInstallClick()
-                  }}
-                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-                  aria-label="安装为应用"
-                >
-                  <svg
-                    className="w-5 h-5 text-gray-600 dark:text-gray-400"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    viewBox="0 0 24 24"
+            {currentUser && (
+              <div className="mr-2 hidden items-center gap-2 rounded-full border border-gray-200 bg-white/80 px-3 py-1 text-xs text-gray-600 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300 sm:flex">
+                <span className="font-semibold text-gray-700 dark:text-gray-100">{currentUser.username}</span>
+                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
+                  {currentUser.role === 'admin' ? 'Admin' : 'User'}
+                </span>
+                {currentUser.role !== 'admin' && typeof currentUser.remainingGenerations === 'number' && (
+                  <span 
+                    className={`transition-all duration-300 ${
+                      showDecrementAnimation 
+                        ? 'scale-125 text-orange-500 font-bold animate-pulse' 
+                        : ''
+                    }`}
                   >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
+                    剩余 {currentUser.remainingGenerations} 次
+                  </span>
+                )}
+                <button
+                  onClick={() => { void logout() }}
+                  className="rounded-full px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.08] dark:hover:text-white"
+                >
+                  退出
                 </button>
-                <ViewportTooltip visible={installTooltip.visible} className="whitespace-nowrap">
-                  安装为应用
-                </ViewportTooltip>
               </div>
             )}
             <div

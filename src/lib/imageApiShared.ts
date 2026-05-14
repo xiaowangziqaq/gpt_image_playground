@@ -11,6 +11,7 @@ export const MAX_IMAGE_INPUT_PAYLOAD_BYTES = 512 * 1024 * 1024
 
 export interface CallApiOptions {
   settings: AppSettings
+  sessionToken?: string | null
   prompt: string
   params: TaskParams
   /** 输入图片的 data URL 列表 */

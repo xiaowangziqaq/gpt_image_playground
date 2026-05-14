@@ -20,6 +20,25 @@ function loadDevProxyConfig() {
 export default defineConfig(({ command }) => {
   const devProxyConfig = command === 'serve' ? loadDevProxyConfig() : null
 
+  const authApiProxy = {
+    '/api/auth': {
+      target: 'http://127.0.0.1:2166',
+      changeOrigin: true,
+    },
+    '/api/admin': {
+      target: 'http://127.0.0.1:2166',
+      changeOrigin: true,
+    },
+    '/api/tasks': {
+      target: 'http://127.0.0.1:2166',
+      changeOrigin: true,
+    },
+    '/api/images': {
+      target: 'http://127.0.0.1:2166',
+      changeOrigin: true,
+    },
+  }
+
   return {
     plugins: [react()],
     base: './',
@@ -29,21 +48,21 @@ export default defineConfig(({ command }) => {
     },
     server: {
       host: true,
-      proxy:
-        devProxyConfig?.enabled
-          ? {
-              [devProxyConfig.prefix]: {
-                target: devProxyConfig.target,
-                changeOrigin: devProxyConfig.changeOrigin,
-                secure: devProxyConfig.secure,
-                rewrite: (path) =>
-                  path.replace(
-                    new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
-                    '',
-                  ),
-              },
-            }
-          : undefined,
+      proxy: devProxyConfig?.enabled
+        ? {
+            ...authApiProxy,
+            [devProxyConfig.prefix]: {
+              target: devProxyConfig.target,
+              changeOrigin: devProxyConfig.changeOrigin,
+              secure: devProxyConfig.secure,
+              rewrite: (path) =>
+                path.replace(
+                  new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+                  '',
+                ),
+            },
+          }
+        : authApiProxy,
     },
   }
 })

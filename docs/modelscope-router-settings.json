@@ -1,0 +1,86 @@
+{
+  "customProviders": [
+    {
+      "id": "modelscope-router",
+      "name": "ModelScope Router",
+      "template": "http-image",
+      "submit": {
+        "path": "chat/completions",
+        "method": "POST",
+        "contentType": "json",
+        "body": {
+          "model": "$profile.model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "$prompt"
+            }
+          ],
+          "size": "$params.size",
+          "quality": "$params.quality",
+          "n": "$params.n",
+          "output_format": "$params.output_format",
+          "output_compression": "$params.output_compression",
+          "moderation": "$params.moderation"
+        },
+        "result": {
+          "imageUrlPaths": [
+            "image_url",
+            "images.*",
+            "choices.0.message.content"
+          ],
+          "b64JsonPaths": []
+        }
+      },
+      "editSubmit": {
+        "path": "chat/completions",
+        "method": "POST",
+        "contentType": "json",
+        "body": {
+          "model": "img2img",
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "$prompt"
+                },
+                {
+                  "type": "image_url",
+                  "image_url": {
+                    "url": "$inputImages.dataUrls.0"
+                  }
+                }
+              ]
+            }
+          ],
+          "size": "$params.size",
+          "quality": "$params.quality",
+          "n": "$params.n",
+          "output_format": "$params.output_format",
+          "output_compression": "$params.output_compression",
+          "moderation": "$params.moderation"
+        },
+        "result": {
+          "imageUrlPaths": [
+            "image_url",
+            "images.*",
+            "choices.0.message.content"
+          ],
+          "b64JsonPaths": []
+        }
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "name": "ModelScope Router",
+      "provider": "modelscope-router",
+      "baseUrl": "http://127.0.0.1:2166/v1",
+      "apiKey": "local-router",
+      "model": "txt2img",
+      "apiMode": "images"
+    }
+  ]
+}

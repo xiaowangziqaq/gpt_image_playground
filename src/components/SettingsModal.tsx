@@ -22,7 +22,7 @@ import {
   switchApiProfileProvider,
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import type { ApiProfile, AppSettings, CustomProviderDefinition } from '../types'
+import type { ApiProfile, AppSettings, AuthUser, CustomProviderDefinition } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
@@ -271,6 +271,14 @@ export default function SettingsModal() {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
+  const saveAdminApiSettings = useStore((s) => s.saveAdminApiSettings)
+  const currentUser = useStore((s) => s.currentUser)
+  const managedUsers = useStore((s) => s.managedUsers)
+  const managedUsersLoading = useStore((s) => s.managedUsersLoading)
+  const refreshManagedUsers = useStore((s) => s.refreshManagedUsers)
+  const createManagedUser = useStore((s) => s.createManagedUser)
+  const updateManagedUser = useStore((s) => s.updateManagedUser)
+  const deleteManagedUser = useStore((s) => s.deleteManagedUser)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setReusedTaskApiProfile = useStore((s) => s.setReusedTaskApiProfile)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -297,7 +305,7 @@ export default function SettingsModal() {
   const [profileImportUrlTooltipVisible, setProfileImportUrlTooltipVisible] = useState(false)
   const [duplicateProfileTooltipVisible, setDuplicateProfileTooltipVisible] = useState(false)
   const [llmPromptTooltipVisible, setLlmPromptTooltipVisible] = useState(false)
-  const [activeTab, setActiveTab] = useState<'general' | 'api' | 'data' | 'about'>('general')
+  const [activeTab, setActiveTab] = useState<'general' | 'api' | 'users' | 'data'>('general')
   const [exportConfig, setExportConfig] = useState(true)
   const [exportTasks, setExportTasks] = useState(true)
   const [importConfig, setImportConfig] = useState(true)
@@ -309,6 +317,8 @@ export default function SettingsModal() {
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
   const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
   const [dragDropPosition, setDragDropPosition] = useState<'before' | 'after' | null>(null)
+  const [newUserForm, setNewUserForm] = useState({ username: '', password: '', remainingGenerations: '10' })
+  const [userActionLoading, setUserActionLoading] = useState<string | null>(null)
   const [profileTouchDragPreview, setProfileTouchDragPreview] = useState<{
     label: string
     providerLabel: string
@@ -334,6 +344,7 @@ export default function SettingsModal() {
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
   const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
+  const isAdmin = currentUser?.role === 'admin'
 
   const unorderedProviderOptions = [
     { label: 'OpenAI 兼容接口', value: 'openai', draggable: true },
@@ -392,7 +403,13 @@ export default function SettingsModal() {
     })
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
-  }, [apiProxyAvailable, apiProxyLocked, showSettings, settings, reusedTaskApiProfileId])
+    if (!isAdmin && activeTab === 'api') {
+      setActiveTab('general')
+    }
+    if (isAdmin) {
+      void refreshManagedUsers().catch(() => {})
+    }
+  }, [apiProxyAvailable, apiProxyLocked, showSettings, settings, reusedTaskApiProfileId, isAdmin, activeTab, refreshManagedUsers])
 
   useEffect(() => {
     setTimeoutInput(String(activeProfile.timeout))
@@ -496,6 +513,9 @@ export default function SettingsModal() {
     })
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
+    if (isAdmin) {
+      saveAdminApiSettings()
+    }
   }
 
   const updateCopyImportUrlOptions = (patch: Partial<CopyImportUrlOptions>) => {
@@ -988,6 +1008,9 @@ export default function SettingsModal() {
             })
         setDraft(nextDraft)
         setSettings(nextDraft)
+        if (isAdmin) {
+          saveAdminApiSettings()
+        }
         setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
         setShowCustomProviderImport(false)
         setEditingCustomProviderId(null)
@@ -1057,15 +1080,28 @@ export default function SettingsModal() {
                 </svg>
                 习惯配置
               </button>
-              <button
-                onClick={() => setActiveTab('api')}
-                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'api' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                </svg>
-                API 配置
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setActiveTab('api')}
+                  className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'api' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                  </svg>
+                  API 配置
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  onClick={() => setActiveTab('users')}
+                  className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'users' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                  用户管理
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('data')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'data' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
@@ -1074,15 +1110,6 @@ export default function SettingsModal() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
                 </svg>
                 数据管理
-              </button>
-              <button
-                onClick={() => setActiveTab('about')}
-                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'about' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                关于
               </button>
             </nav>
           </div>
@@ -1186,7 +1213,7 @@ export default function SettingsModal() {
               </div>
             )}
             
-            {activeTab === 'api' && (
+            {activeTab === 'api' && isAdmin && (
               <div className="space-y-4">
                 <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
@@ -1589,7 +1616,194 @@ export default function SettingsModal() {
               )}
             </div>
             )}
-            
+
+            {activeTab === 'users' && isAdmin && (
+              <div className="space-y-4">
+                <div className="rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05] flex items-start gap-3">
+                  <svg className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                  <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
+                    作为管理员，您可以创建普通用户并分配生图次数。普通用户只能在分配的次数内使用生图功能。
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                    </svg>
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">创建新用户</h4>
+                  </div>
+                  <div className="grid gap-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs text-gray-600 dark:text-gray-300">用户名</span>
+                        <input
+                          type="text"
+                          value={newUserForm.username}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, username: e.target.value })}
+                          placeholder="2-50个字符"
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs text-gray-600 dark:text-gray-300">密码</span>
+                        <input
+                          type="password"
+                          value={newUserForm.password}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                          placeholder="至少6个字符"
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs text-gray-600 dark:text-gray-300">剩余生图次数</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={newUserForm.remainingGenerations}
+                          onChange={(e) => setNewUserForm({ ...newUserForm, remainingGenerations: e.target.value })}
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <button
+                          onClick={async () => {
+                            if (!newUserForm.username.trim() || !newUserForm.password) {
+                              return
+                            }
+                            try {
+                              setUserActionLoading('create')
+                              await createManagedUser({
+                                username: newUserForm.username.trim(),
+                                password: newUserForm.password,
+                                remainingGenerations: Number(newUserForm.remainingGenerations) || 0,
+                              })
+                              setNewUserForm({ username: '', password: '', remainingGenerations: '10' })
+                            } catch (err) {
+                              console.error('Failed to create user:', err)
+                            } finally {
+                              setUserActionLoading(null)
+                            }
+                          }}
+                          disabled={!newUserForm.username.trim() || !newUserForm.password || userActionLoading === 'create'}
+                          className="w-full rounded-xl bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {userActionLoading === 'create' ? '创建中...' : '创建用户'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <svg className="w-4 h-4 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                    </svg>
+                    <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">用户列表</h4>
+                    {managedUsersLoading && (
+                      <svg className="w-4 h-4 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    )}
+                  </div>
+                  {managedUsers.length === 0 ? (
+                    <div className="text-center py-8 text-sm text-gray-400 dark:text-gray-500">
+                      暂无用户数据
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {managedUsers.map((user) => (
+                        <div key={user.username} className="flex items-center justify-between p-3 rounded-xl bg-gray-50/50 dark:bg-white/[0.02] border border-gray-100 dark:border-white/[0.05]">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${user.role === 'admin' ? 'bg-blue-100 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400' : 'bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300'}`}>
+                              {user.username.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="text-sm font-medium text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                                {user.username}
+                                {user.role === 'admin' && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400">管理员</span>
+                                )}
+                                {user.disabled && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400">已禁用</span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
+                                {user.role === 'admin' ? '无限次数' : `剩余 ${user.remainingGenerations ?? 0} 次 · 已生成 ${user.successfulGenerations} 次`}
+                              </div>
+                            </div>
+                          </div>
+                          {user.role !== 'admin' && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={async () => {
+                                  const newCount = prompt('设置剩余生图次数：', String(user.remainingGenerations ?? 0))
+                                  if (newCount === null) return
+                                  const count = Number(newCount)
+                                  if (!Number.isFinite(count) || count < 0) return
+                                  try {
+                                    setUserActionLoading(user.username)
+                                    await updateManagedUser(user.username, { remainingGenerations: count })
+                                  } catch (err) {
+                                    console.error('Failed to update user:', err)
+                                  } finally {
+                                    setUserActionLoading(null)
+                                  }
+                                }}
+                                disabled={userActionLoading === user.username}
+                                className="px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-white/[0.06] dark:hover:bg-white/[0.1] dark:text-gray-300 transition disabled:opacity-50"
+                              >
+                                设置次数
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    setUserActionLoading(user.username)
+                                    await updateManagedUser(user.username, { disabled: !user.disabled })
+                                  } catch (err) {
+                                    console.error('Failed to toggle user:', err)
+                                  } finally {
+                                    setUserActionLoading(null)
+                                  }
+                                }}
+                                disabled={userActionLoading === user.username}
+                                className={`px-3 py-1.5 text-xs rounded-lg transition disabled:opacity-50 ${user.disabled ? 'bg-green-100 hover:bg-green-200 text-green-700 dark:bg-green-500/20 dark:hover:bg-green-500/30 dark:text-green-400' : 'bg-yellow-100 hover:bg-yellow-200 text-yellow-700 dark:bg-yellow-500/20 dark:hover:bg-yellow-500/30 dark:text-yellow-400'}`}
+                              >
+                                {user.disabled ? '启用' : '禁用'}
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!confirm(`确定要删除用户 "${user.username}" 吗？此操作不可恢复。`)) return
+                                  try {
+                                    setUserActionLoading(user.username)
+                                    await deleteManagedUser(user.username)
+                                  } catch (err) {
+                                    console.error('Failed to delete user:', err)
+                                  } finally {
+                                    setUserActionLoading(null)
+                                  }
+                                }}
+                                disabled={userActionLoading === user.username}
+                                className="px-3 py-1.5 text-xs rounded-lg bg-red-100 hover:bg-red-200 text-red-700 dark:bg-red-500/20 dark:hover:bg-red-500/30 dark:text-red-400 transition disabled:opacity-50"
+                              >
+                                删除
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {activeTab === 'data' && (
               <div className="space-y-4">
                 <div className="rounded-2xl bg-gray-50/80 p-4 border border-gray-200/60 dark:bg-white/[0.02] dark:border-white/[0.05] flex items-start gap-3">
@@ -1702,54 +1916,6 @@ export default function SettingsModal() {
                   >
                     清空所选数据
                   </button>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'about' && (
-              <div className="flex h-full min-h-[300px] flex-col items-center justify-center pb-8 px-6">
-                <a
-                  href="https://github.com/CookSleep/gpt_image_playground"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="group flex flex-col items-center outline-none"
-                >
-                  <div className="mb-5 flex h-[88px] w-[88px] items-center justify-center rounded-full border border-gray-200/80 bg-gray-50/50 text-gray-800 transition-colors group-hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-100 dark:group-hover:bg-white/[0.06]">
-                    <GithubIcon className="h-11 w-11" />
-                  </div>
-                  <h4 className="text-[17px] font-bold text-gray-800 dark:text-gray-100">GPT Image Playground</h4>
-                  <p className="mt-1.5 text-[13px] text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-400 dark:group-hover:text-gray-300">
-                    @CookSleep
-                  </p>
-                </a>
-                
-                <p className="mt-8 mb-6 max-w-[360px] text-center text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                  本项目的成长离不开每一位用户的使用、反馈、贡献与支持，感谢一路有你。
-                </p>
-
-                <div className="flex flex-wrap items-center justify-center gap-3">
-                  <a
-                    href="https://github.com/CookSleep/gpt_image_playground/issues"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                  >
-                    <svg className="h-4 w-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    反馈问题
-                  </a>
-                  <a
-                    href="https://www.ifdian.net/a/cooksleep"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                  >
-                    <svg className="h-4 w-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                    </svg>
-                    赞助作者
-                  </a>
                 </div>
               </div>
             )}

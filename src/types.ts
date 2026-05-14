@@ -87,6 +87,23 @@ export interface AppSettings {
   activeProfileId: string
 }
 
+export type UserRole = 'admin' | 'user'
+
+export interface AuthUser {
+  username: string
+  role: UserRole
+  remainingGenerations: number | null
+  successfulGenerations: number
+  disabled: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface LoginResponse {
+  token: string
+  user: AuthUser
+}
+
 // ===== 任务参数 =====
 
 export interface TaskParams {

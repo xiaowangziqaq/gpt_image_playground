@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import type {
   ApiProfile,
   AppSettings,
+  AuthUser,
   TaskParams,
   InputImage,
   MaskDraft,
@@ -19,7 +20,7 @@ import {
   putTask,
   deleteTask as dbDeleteTask,
   clearTasks as dbClearTasks,
-  getImage,
+  getImage as getDbImage,
   getImageThumbnail,
   getStoredFreshImageThumbnail,
   getAllImageIds,
@@ -34,6 +35,26 @@ import { callImageApi } from './lib/api'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
+import {
+  createUser as createManagedUser,
+  deleteUser as deleteManagedUser,
+  fetchCurrentUser as fetchAuthCurrentUser,
+  fetchUsers as fetchManagedUsers,
+  loginWithPassword,
+  logoutSession,
+  updateUser as updateManagedUser,
+  getApiSettings,
+  setApiSettings,
+  saveTask,
+  getTasks,
+  deleteTask as deleteBackendTask,
+  saveImage,
+  getImages,
+  getImage as getBackendImage,
+  deleteImage as deleteBackendImage,
+  decrementGenerations,
+} from './lib/auth'
+import type { StoredImage } from './types'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
@@ -61,6 +82,79 @@ const OPENAI_INTERRUPTED_ERROR = '请求中断'
 
 function createOpenAITimeoutError(timeoutSeconds: number) {
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。`
+}
+
+async function syncTaskToBackend(task: unknown, token: string | null) {
+  if (!token) return
+  try {
+    await saveTask(token, task)
+  } catch (error) {
+    console.error('Failed to sync task to backend:', error)
+  }
+}
+
+async function syncImageToBackend(imageId: string, dataUrl: string, source: string | undefined, width: number | undefined, height: number | undefined, token: string | null) {
+  if (!token) return
+  try {
+    const thumbnail = await getStoredFreshImageThumbnail(imageId)
+    await saveImage(token, {
+      id: imageId,
+      dataUrl,
+      thumbnailDataUrl: thumbnail?.thumbnailDataUrl,
+      source,
+      width,
+      height,
+    })
+  } catch (error) {
+    console.error('Failed to sync image to backend:', error)
+  }
+}
+
+async function syncDeleteTaskToBackend(taskId: string, token: string | null) {
+  if (!token) return
+  try {
+    await deleteBackendTask(token, taskId)
+  } catch (error) {
+    console.error('Failed to sync task deletion to backend:', error)
+  }
+}
+
+async function syncDeleteImageToBackend(imageId: string, token: string | null) {
+  if (!token) return
+  try {
+    await deleteBackendImage(token, imageId)
+  } catch (error) {
+    console.error('Failed to sync image deletion to backend:', error)
+  }
+}
+
+async function handleGenerationComplete() {
+  const token = useStore.getState().authToken
+  const currentUser = useStore.getState().currentUser
+  
+  if (!token || !currentUser || currentUser.role === 'admin') return
+  
+  try {
+    const updatedUser = await decrementGenerations(token)
+    useStore.getState().setCurrentUser(updatedUser)
+    const oldCount = currentUser.remainingGenerations ?? 0
+    const newCount = updatedUser.remainingGenerations ?? 0
+    if (newCount < oldCount) {
+      useStore.getState().showToast(`生图成功！剩余次数：${newCount}`, 'success')
+    }
+  } catch (error) {
+    console.error('Failed to decrement generations:', error)
+  }
+}
+
+async function storeImageWithSync(dataUrl: string, source: NonNullable<StoredImage['source']> = 'upload'): Promise<string> {
+  const id = await storeImage(dataUrl, source)
+  const token = useStore.getState().authToken
+  if (token) {
+    const thumbnail = await getStoredFreshImageThumbnail(id)
+    syncImageToBackend(id, dataUrl, source, thumbnail?.width, thumbnail?.height, token)
+  }
+  return id
 }
 
 export function getCachedImage(id: string): string | undefined {
@@ -109,7 +203,7 @@ function cacheThumbnail(id: string, thumbnail: { dataUrl: string; width?: number
 export async function ensureImageCached(id: string): Promise<string | undefined> {
   const cached = getCachedImage(id)
   if (cached) return cached
-  const rec = await getImage(id)
+  const rec = await getDbImage(id)
   if (rec) {
     cacheImage(id, rec.dataUrl)
     return rec.dataUrl
@@ -193,7 +287,7 @@ async function getNextThumbnailBackfillBatch() {
   if (candidates.length === 0) return []
 
   const sizes = await Promise.all(candidates.map(async (id) => {
-    const image = await getImage(id)
+    const image = await getDbImage(id)
     return { width: image?.width, height: image?.height }
   }))
   const concurrency = getThumbnailConcurrencyForBatch(sizes)
@@ -309,6 +403,7 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
   return {
+    authToken: state.authToken,
     settings,
     params: state.params,
     ...(settings.persistInputOnRestart
@@ -333,6 +428,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ...currentState,
     ...persisted,
     settings,
+    authToken: typeof persisted.authToken === 'string' ? persisted.authToken : null,
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
     supportPromptOpen: Boolean(persisted.supportPromptOpen),
     supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
@@ -344,9 +440,28 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
 // ===== Store 类型 =====
 
 interface AppState {
+  authToken: string | null
+  currentUser: AuthUser | null
+  authLoading: boolean
+  authInitialized: boolean
+  authError: string | null
+  managedUsers: AuthUser[]
+  managedUsersLoading: boolean
+  login: (username: string, password: string) => Promise<void>
+  logout: () => Promise<void>
+  setCurrentUser: (user: AuthUser | null) => void
+  setAuthLoading: (loading: boolean) => void
+  setAuthInitialized: (initialized: boolean) => void
+  setAuthError: (message: string | null) => void
+  refreshCurrentUser: () => Promise<void>
+  refreshManagedUsers: () => Promise<void>
+  createManagedUser: (payload: { username: string; password: string; remainingGenerations: number }) => Promise<void>
+  updateManagedUser: (username: string, payload: { password?: string; remainingGenerations?: number; disabled?: boolean }) => Promise<void>
+  deleteManagedUser: (username: string) => Promise<void>
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
+  saveAdminApiSettings: () => Promise<void>
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
@@ -429,6 +544,206 @@ interface AppState {
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
+      authToken: null,
+      currentUser: null,
+      authLoading: false,
+      authInitialized: false,
+      authError: null,
+      managedUsers: [],
+      managedUsersLoading: false,
+      login: async (username, password) => {
+        set({ authLoading: true, authError: null })
+        try {
+          const result = await loginWithPassword(username, password)
+          set({
+            authToken: result.token,
+            currentUser: result.user,
+            authLoading: false,
+            authInitialized: true,
+            authError: null,
+          })
+          if (result.user.role === 'admin') {
+            await get().refreshManagedUsers()
+          } else {
+            set({ managedUsers: [] })
+            try {
+              const adminSettings = await getApiSettings(result.token)
+              if (adminSettings && typeof adminSettings === 'object') {
+                const settings = adminSettings as Partial<AppSettings>
+                if (settings.profiles && Array.isArray(settings.profiles) && settings.profiles.length > 0) {
+                  get().setSettings(settings)
+                }
+              }
+            } catch (err) {
+              console.error('Failed to load admin API settings:', err)
+            }
+          }
+          
+          // Clear IndexedDB before loading user data
+          try {
+            await Promise.all([
+              dbClearTasks(),
+              clearImages(),
+            ])
+          } catch (err) {
+            console.error('Failed to clear IndexedDB:', err)
+          }
+          
+          // Load user's tasks and images from backend
+          try {
+            const [backendTasks, backendImages] = await Promise.all([
+              getTasks(result.token),
+              getImages(result.token),
+            ])
+            
+            // Merge tasks into IndexedDB
+            for (const task of backendTasks) {
+              try {
+                await putTask(task as TaskRecord)
+              } catch (err) {
+                console.error('Failed to merge task:', err)
+              }
+            }
+            
+            // Merge images into IndexedDB
+            for (const img of backendImages) {
+              try {
+                const image = img as { id: string; dataUrl: string; thumbnailDataUrl?: string; source?: string; width?: number; height?: number; createdAt?: number }
+                await putImage({
+                  id: image.id,
+                  dataUrl: image.dataUrl,
+                  createdAt: image.createdAt || Date.now(),
+                  source: image.source as 'upload' | 'generated' | 'mask' | undefined,
+                  width: image.width,
+                  height: image.height,
+                })
+                if (image.thumbnailDataUrl) {
+                  await putImageThumbnail({
+                    id: image.id,
+                    thumbnailDataUrl: image.thumbnailDataUrl,
+                    width: image.width,
+                    height: image.height,
+                    thumbnailVersion: CURRENT_THUMBNAIL_VERSION,
+                  })
+                }
+              } catch (err) {
+                console.error('Failed to merge image:', err)
+              }
+            }
+            
+            // Reload tasks from IndexedDB
+            const allTasks = await getAllTasks()
+            set({ tasks: allTasks })
+          } catch (err) {
+            console.error('Failed to load user data from backend:', err)
+          }
+        } catch (error) {
+          set({
+            authToken: null,
+            currentUser: null,
+            authLoading: false,
+            authInitialized: true,
+            authError: error instanceof Error ? error.message : String(error),
+            managedUsers: [],
+          })
+          throw error
+        }
+      },
+      logout: async () => {
+        const token = get().authToken
+        await logoutSession(token)
+        set({
+          authToken: null,
+          currentUser: null,
+          authLoading: false,
+          authInitialized: true,
+          authError: null,
+          managedUsers: [],
+          managedUsersLoading: false,
+          showSettings: false,
+        })
+      },
+      setCurrentUser: (currentUser) => set({ currentUser }),
+      setAuthLoading: (authLoading) => set({ authLoading }),
+      setAuthInitialized: (authInitialized) => set({ authInitialized }),
+      setAuthError: (authError) => set({ authError }),
+      refreshCurrentUser: async () => {
+        const token = get().authToken
+        if (!token) {
+          set({
+            currentUser: null,
+            authInitialized: true,
+            authError: null,
+            managedUsers: [],
+          })
+          return
+        }
+
+        set({ authLoading: true, authError: null })
+        try {
+          const user = await fetchAuthCurrentUser(token)
+          set({
+            currentUser: user,
+            authLoading: false,
+            authInitialized: true,
+            authError: null,
+          })
+          if (user.role === 'admin') {
+            await get().refreshManagedUsers()
+          } else {
+            set({ managedUsers: [] })
+          }
+        } catch (error) {
+          await logoutSession(token)
+          set({
+            authToken: null,
+            currentUser: null,
+            authLoading: false,
+            authInitialized: true,
+            authError: error instanceof Error ? error.message : String(error),
+            managedUsers: [],
+            managedUsersLoading: false,
+          })
+        }
+      },
+      refreshManagedUsers: async () => {
+        const token = get().authToken
+        const currentUser = get().currentUser
+        if (!token || currentUser?.role !== 'admin') {
+          set({ managedUsers: [], managedUsersLoading: false })
+          return
+        }
+        set({ managedUsersLoading: true })
+        try {
+          const users = await fetchManagedUsers(token)
+          set({ managedUsers: users, managedUsersLoading: false })
+        } catch (error) {
+          set({ managedUsersLoading: false })
+          throw error
+        }
+      },
+      createManagedUser: async (payload) => {
+        const token = get().authToken
+        if (!token) throw new Error('请先登录')
+        await createManagedUser(token, payload)
+        await get().refreshManagedUsers()
+      },
+      updateManagedUser: async (username, payload) => {
+        const token = get().authToken
+        if (!token) throw new Error('请先登录')
+        const updated = await updateManagedUser(token, username, payload)
+        set((state) => ({
+          currentUser: state.currentUser?.username === updated.username ? updated : state.currentUser,
+        }))
+        await get().refreshManagedUsers()
+      },
+      deleteManagedUser: async (username) => {
+        const token = get().authToken
+        if (!token) throw new Error('请先登录')
+        await deleteManagedUser(token, username)
+        await get().refreshManagedUsers()
+      },
+
       // Settings
       settings: { ...DEFAULT_SETTINGS },
       setSettings: (s) => set((st) => {
@@ -468,6 +783,18 @@ export const useStore = create<AppState>()(
             : {}),
         }
       }),
+      saveAdminApiSettings: async () => {
+        const currentUser = get().currentUser
+        const token = get().authToken
+        if (!currentUser || currentUser.role !== 'admin' || !token) return
+        
+        try {
+          const settings = get().settings
+          await setApiSettings(token, settings)
+        } catch (err) {
+          console.error('Failed to save admin API settings:', err)
+        }
+      },
       dismissedCodexCliPrompts: [],
       dismissCodexCliPrompt: (key) => set((st) => ({
         dismissedCodexCliPrompts: st.dismissedCodexCliPrompts.includes(key)
@@ -971,7 +1298,7 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
   const actualParamsList = await resolveImageSizeParamsList(result.images, result.actualParamsList)
   const outputIds: string[] = []
   for (const dataUrl of result.images) {
-    const imgId = await storeImage(dataUrl, 'generated')
+    const imgId = await storeImageWithSync(dataUrl, 'generated')
     cacheImage(imgId, dataUrl)
     outputIds.push(imgId)
   }
@@ -987,6 +1314,7 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
     finishedAt: Date.now(),
     elapsed: Date.now() - task.createdAt,
   })
+  handleGenerationComplete()
   useStore.getState().showToast(`fal.ai 任务已恢复，共 ${outputIds.length} 张图片`, 'success')
 }
 
@@ -1026,6 +1354,7 @@ async function recoverFalTask(taskId: string) {
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
+  await useStore.getState().refreshCurrentUser()
   const storedTasks = await getAllTasks()
   const { tasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
   await Promise.all(interruptedTasks.map((task) => putTask(task)))
@@ -1079,7 +1408,7 @@ export async function initStore() {
       cacheImage(img.id, img.dataUrl)
       continue
     }
-    const storedImage = await getImage(img.id)
+    const storedImage = await getDbImage(img.id)
     if (storedImage?.dataUrl) {
       restoredInputImages.push({ ...img, dataUrl: storedImage.dataUrl })
       cacheImage(img.id, storedImage.dataUrl)
@@ -1092,8 +1421,18 @@ export async function initStore() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog, currentUser } =
     useStore.getState()
+
+  if (!currentUser) {
+    showToast('请先登录后再使用。', 'error')
+    return
+  }
+
+  if (currentUser.role !== 'admin' && typeof currentUser.remainingGenerations === 'number' && currentUser.remainingGenerations <= 0) {
+    showToast('剩余生图次数不足，请联系管理员。', 'error')
+    return
+  }
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
@@ -1152,7 +1491,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
         })
         return
       }
-      maskImageId = await storeImage(maskDraft.maskDataUrl, 'mask')
+      maskImageId = await storeImageWithSync(maskDraft.maskDataUrl, 'mask')
       cacheImage(maskImageId, maskDraft.maskDataUrl)
       maskTargetImageId = maskDraft.targetImageId
     } catch (err) {
@@ -1166,7 +1505,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   // 持久化输入图片到 IndexedDB（此前只在内存缓存中）
   for (const img of orderedInputImages) {
-    await storeImage(img.dataUrl)
+    await storeImageWithSync(img.dataUrl)
   }
 
   const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
@@ -1198,6 +1537,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([task, ...latestTasks])
   await putTask(task)
+  syncTaskToBackend(task, useStore.getState().authToken)
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1255,6 +1595,7 @@ async function executeTask(taskId: string) {
 
     const result = await callImageApi({
       settings: requestSettings,
+      sessionToken: useStore.getState().authToken,
       prompt: replaceImageMentionsForApi(task.prompt, inputDataUrls.length),
       params: task.params,
       inputImageDataUrls: inputDataUrls,
@@ -1282,7 +1623,7 @@ async function executeTask(taskId: string) {
     // 存储输出图片
     const outputIds: string[] = []
     for (const dataUrl of result.images) {
-      const imgId = await storeImage(dataUrl, 'generated')
+      const imgId = await storeImageWithSync(dataUrl, 'generated')
       cacheImage(imgId, dataUrl)
       outputIds.push(imgId)
     }
@@ -1333,6 +1674,7 @@ async function executeTask(taskId: string) {
       customRecoverable: false,
     })
 
+    handleGenerationComplete()
     useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
     const currentMask = useStore.getState().maskDraft
     if (
@@ -1405,7 +1747,10 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   setTasks(updated)
   maybeOpenSupportPrompt(tasks, updated, taskId)
   const task = updated.find((t) => t.id === taskId)
-  if (task) putTask(task)
+  if (task) {
+    putTask(task)
+    syncTaskToBackend(task, useStore.getState().authToken)
+  }
 }
 
 /** 重试失败的任务：创建新任务并执行 */
@@ -1436,6 +1781,7 @@ export async function retryTask(task: TaskRecord) {
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([newTask, ...latestTasks])
   await putTask(newTask)
+  syncTaskToBackend(newTask, useStore.getState().authToken)
 
   executeTask(taskId)
 }
@@ -1669,7 +2015,7 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
   const actualParamsList = await readImageSizeParamsList(result.images)
   const outputIds: string[] = []
   for (const dataUrl of result.images) {
-    const imgId = await storeImage(dataUrl, 'generated')
+    const imgId = await storeImageWithSync(dataUrl, 'generated')
     cacheImage(imgId, dataUrl)
     outputIds.push(imgId)
   }
@@ -1685,6 +2031,7 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
     finishedAt: Date.now(),
     elapsed: Date.now() - task.createdAt,
   })
+  handleGenerationComplete()
   useStore.getState().showToast(`自定义异步任务已恢复，共 ${outputIds.length} 张图片`, 'success')
 }
 
@@ -1920,7 +2267,7 @@ export async function importData(file: File, options: ImportOptions = { importCo
 export async function addImageFromFile(file: File): Promise<void> {
   if (!file.type.startsWith('image/')) return
   const dataUrl = await fileToDataUrl(file)
-  const id = await storeImage(dataUrl, 'upload')
+  const id = await storeImageWithSync(dataUrl, 'upload')
   cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
 }
@@ -1931,7 +2278,7 @@ export async function addImageFromUrl(src: string): Promise<void> {
   const blob = await res.blob()
   if (!blob.type.startsWith('image/')) throw new Error('不是有效的图片')
   const dataUrl = await blobToDataUrl(blob)
-  const id = await storeImage(dataUrl, 'upload')
+  const id = await storeImageWithSync(dataUrl, 'upload')
   cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
 }

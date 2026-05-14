@@ -15,9 +15,12 @@ import Toast from './components/Toast'
 import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import SupportPromptModal from './components/SupportPromptModal'
+import LoginScreen from './components/LoginScreen'
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
+  const authInitialized = useStore((s) => s.authInitialized)
+  const currentUser = useStore((s) => s.currentUser)
   useDockerApiUrlMigrationNotice()
 
   useEffect(() => {
@@ -47,6 +50,18 @@ export default function App() {
     document.addEventListener('dragstart', preventPageImageDrag)
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
   }, [])
+
+  if (!authInitialized) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-gray-50 text-sm text-gray-500">
+        正在初始化...
+      </main>
+    )
+  }
+
+  if (!currentUser) {
+    return <LoginScreen />
+  }
 
   return (
     <>
