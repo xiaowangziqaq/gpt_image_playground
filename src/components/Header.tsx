@@ -126,29 +126,56 @@ export default function Header() {
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {currentUser && (
-              <div className="mr-2 hidden items-center gap-2 rounded-full border border-gray-200 bg-white/80 px-3 py-1 text-xs text-gray-600 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300 sm:flex">
-                <span className="font-semibold text-gray-700 dark:text-gray-100">{currentUser.username}</span>
-                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
-                  {currentUser.role === 'admin' ? 'Admin' : 'User'}
-                </span>
-                {currentUser.role !== 'admin' && typeof currentUser.remainingGenerations === 'number' && (
-                  <span 
-                    className={`transition-all duration-300 ${
-                      showDecrementAnimation 
-                        ? 'scale-125 text-orange-500 font-bold animate-pulse' 
-                        : ''
-                    }`}
-                  >
-                    剩余 {currentUser.remainingGenerations} 次
+              <>
+                <div className="hidden sm:flex mr-2 items-center gap-2 rounded-full border border-gray-200 bg-white/80 px-3 py-1 text-xs text-gray-600 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300">
+                  <span className="font-semibold text-gray-700 dark:text-gray-100">{currentUser.username}</span>
+                  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
+                    {currentUser.role === 'admin' ? 'Admin' : 'User'}
                   </span>
-                )}
-                <button
-                  onClick={() => { void logout() }}
-                  className="rounded-full px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.08] dark:hover:text-white"
-                >
-                  退出
-                </button>
-              </div>
+                  {currentUser.role !== 'admin' && typeof currentUser.remainingGenerations === 'number' && (
+                    <span 
+                      className={`transition-all duration-300 ${
+                        showDecrementAnimation 
+                          ? 'scale-125 text-orange-500 font-bold animate-pulse' 
+                          : ''
+                      }`}
+                    >
+                      剩余 {currentUser.remainingGenerations} 次
+                    </span>
+                  )}
+                  <button
+                    onClick={() => { void logout() }}
+                    className="rounded-full px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.08] dark:hover:text-white"
+                  >
+                    退出
+                  </button>
+                </div>
+                <div className="sm:hidden flex items-center gap-1 mr-1">
+                  <div className="rounded-full border border-gray-200 bg-white/80 px-2 py-1 text-[10px] font-semibold text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-300">
+                    {currentUser.username}
+                  </div>
+                  {currentUser.role !== 'admin' && typeof currentUser.remainingGenerations === 'number' && (
+                    <div 
+                      className={`rounded-full bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700 dark:bg-blue-500/10 dark:text-blue-300 transition-all duration-300 ${
+                        showDecrementAnimation 
+                          ? 'scale-125 text-orange-500 animate-pulse' 
+                          : ''
+                      }`}
+                    >
+                      {currentUser.remainingGenerations}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => { void logout() }}
+                    className="p-1.5 rounded-full text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.08] dark:hover:text-white"
+                    title="退出登录"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                  </button>
+                </div>
+              </>
             )}
             <div
               className="relative"
