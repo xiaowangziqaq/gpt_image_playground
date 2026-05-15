@@ -586,17 +586,17 @@ export const useStore = create<AppState>()(
             await get().refreshManagedUsers()
           } else {
             set({ managedUsers: [] })
-            try {
-              const adminSettings = await getApiSettings(result.token)
-              if (adminSettings && typeof adminSettings === 'object') {
-                const settings = adminSettings as Partial<AppSettings>
-                if (settings.profiles && Array.isArray(settings.profiles) && settings.profiles.length > 0) {
-                  get().setSettings(settings)
-                }
+          }
+          try {
+            const adminSettings = await getApiSettings(result.token)
+            if (adminSettings && typeof adminSettings === 'object') {
+              const settings = adminSettings as Partial<AppSettings>
+              if (settings.profiles && Array.isArray(settings.profiles) && settings.profiles.length > 0) {
+                get().setSettings(settings)
               }
-            } catch (err) {
-              console.error('Failed to load admin API settings:', err)
             }
+          } catch (err) {
+            console.error('Failed to load admin API settings:', err)
           }
           
           // Clear IndexedDB before loading user data
@@ -712,6 +712,17 @@ export const useStore = create<AppState>()(
             await get().refreshManagedUsers()
           } else {
             set({ managedUsers: [] })
+          }
+          try {
+            const adminSettings = await getApiSettings(token)
+            if (adminSettings && typeof adminSettings === 'object') {
+              const settings = adminSettings as Partial<AppSettings>
+              if (settings.profiles && Array.isArray(settings.profiles) && settings.profiles.length > 0) {
+                get().setSettings(settings)
+              }
+            }
+          } catch (err) {
+            console.error('Failed to load admin API settings:', err)
           }
         } catch (error) {
           await logoutSession(token)
