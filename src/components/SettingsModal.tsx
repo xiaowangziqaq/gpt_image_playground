@@ -514,7 +514,7 @@ export default function SettingsModal() {
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
     if (isAdmin) {
-      saveAdminApiSettings()
+      void saveAdminApiSettings()
     }
   }
 

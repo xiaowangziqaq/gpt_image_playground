@@ -420,6 +420,27 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
   }
 }
 
+function mergeBackendSettings(localSettings: AppSettings, backendSettings: Partial<AppSettings>): AppSettings {
+  const localHasApiKey = localSettings.profiles.some(p => p.apiKey && p.apiKey.trim())
+  const backendHasApiKey = Array.isArray(backendSettings.profiles) && backendSettings.profiles.some((p: ApiProfile) => p.apiKey && p.apiKey.trim())
+  if (localHasApiKey && !backendHasApiKey) {
+    return localSettings
+  }
+  const merged = normalizeSettings({
+    ...backendSettings,
+    profiles: Array.isArray(backendSettings.profiles)
+      ? backendSettings.profiles.map((bp: ApiProfile) => {
+          const localMatch = localSettings.profiles.find(lp => lp.id === bp.id)
+          if (localMatch && localMatch.apiKey && localMatch.apiKey.trim() && (!bp.apiKey || !bp.apiKey.trim())) {
+            return { ...bp, apiKey: localMatch.apiKey }
+          }
+          return bp
+        })
+      : localSettings.profiles,
+  })
+  return merged
+}
+
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
   return {
@@ -590,9 +611,10 @@ export const useStore = create<AppState>()(
           try {
             const adminSettings = await getApiSettings(result.token)
             if (adminSettings && typeof adminSettings === 'object') {
-              const settings = adminSettings as Partial<AppSettings>
-              if (settings.profiles && Array.isArray(settings.profiles) && settings.profiles.length > 0) {
-                get().setSettings(settings)
+              const backendSettings = adminSettings as Partial<AppSettings>
+              if (backendSettings.profiles && Array.isArray(backendSettings.profiles) && backendSettings.profiles.length > 0) {
+                const merged = mergeBackendSettings(get().settings, backendSettings)
+                get().setSettings(merged)
               }
             }
           } catch (err) {
@@ -671,6 +693,14 @@ export const useStore = create<AppState>()(
       },
       logout: async () => {
         const token = get().authToken
+        const currentUser = get().currentUser
+        if (token && currentUser?.role === 'admin') {
+          try {
+            await get().saveAdminApiSettings()
+          } catch (err) {
+            console.error('Failed to save admin API settings before logout:', err)
+          }
+        }
         await logoutSession(token)
         set({
           authToken: null,
@@ -716,9 +746,10 @@ export const useStore = create<AppState>()(
           try {
             const adminSettings = await getApiSettings(token)
             if (adminSettings && typeof adminSettings === 'object') {
-              const settings = adminSettings as Partial<AppSettings>
-              if (settings.profiles && Array.isArray(settings.profiles) && settings.profiles.length > 0) {
-                get().setSettings(settings)
+              const backendSettings = adminSettings as Partial<AppSettings>
+              if (backendSettings.profiles && Array.isArray(backendSettings.profiles) && backendSettings.profiles.length > 0) {
+                const merged = mergeBackendSettings(get().settings, backendSettings)
+                get().setSettings(merged)
               }
             }
           } catch (err) {

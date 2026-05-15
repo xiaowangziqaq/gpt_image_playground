@@ -1,7 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
-
-const require = createRequire(import.meta.url)
+import { resolve } from 'node:path'
 
 let authServer = null
 let viteServer = null
@@ -45,7 +43,7 @@ function startAuthServer() {
 
 function startVite() {
   console.log('[dev] Starting Vite dev server...')
-  const viteBin = require.resolve('vite/bin/vite.js')
+  const viteBin = resolve('node_modules/vite/bin/vite.js')
   viteServer = spawn('node', [viteBin], {
     stdio: 'inherit',
     env: { ...process.env },
