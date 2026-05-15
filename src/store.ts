@@ -119,6 +119,14 @@ async function syncDeleteTaskToBackend(taskId: string, token: string | null) {
   }
 }
 
+async function deleteTaskEverywhere(taskId: string) {
+  const token = useStore.getState().authToken
+  await Promise.allSettled([
+    dbDeleteTask(taskId),
+    syncDeleteTaskToBackend(taskId, token),
+  ])
+}
+
 async function syncDeleteImageToBackend(imageId: string, token: string | null) {
   if (!token) return
   try {
@@ -126,6 +134,18 @@ async function syncDeleteImageToBackend(imageId: string, token: string | null) {
   } catch (error) {
     console.error('Failed to sync image deletion to backend:', error)
   }
+}
+
+async function deleteImageEverywhere(imageId: string) {
+  const token = useStore.getState().authToken
+  await Promise.allSettled([
+    deleteImage(imageId),
+    syncDeleteImageToBackend(imageId, token),
+  ])
+  imageCache.delete(imageId)
+  thumbnailCache.delete(imageId)
+  thumbnailBackfillIds.delete(imageId)
+  thumbnailBackfillRunningIds.delete(imageId)
 }
 
 async function handleGenerationComplete() {
@@ -1889,7 +1909,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
 
   setTasks(remaining)
   for (const id of taskIds) {
-    await dbDeleteTask(id)
+    await deleteTaskEverywhere(id)
   }
 
   // 找出其他任务仍引用的图片
@@ -1904,9 +1924,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
   // 删除孤立图片
   for (const imgId of deletedImageIds) {
     if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
+      await deleteImageEverywhere(imgId)
     }
   }
 
@@ -1933,7 +1951,7 @@ export async function removeTask(task: TaskRecord) {
   // 从列表移除
   const remaining = tasks.filter((t) => t.id !== task.id)
   setTasks(remaining)
-  await dbDeleteTask(task.id)
+  await deleteTaskEverywhere(task.id)
 
   // 找出其他任务仍引用的图片
   const stillUsed = new Set<string>()
@@ -1947,9 +1965,7 @@ export async function removeTask(task: TaskRecord) {
   // 删除孤立图片
   for (const imgId of taskImageIds) {
     if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
+      await deleteImageEverywhere(imgId)
     }
   }
 
