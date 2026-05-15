@@ -421,15 +421,30 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
 }
 
 function mergeBackendSettings(localSettings: AppSettings, backendSettings: Partial<AppSettings>): AppSettings {
+  if (!backendSettings || typeof backendSettings !== 'object') return localSettings
   const localHasApiKey = localSettings.profiles.some(p => p.apiKey && p.apiKey.trim())
-  const backendHasApiKey = Array.isArray(backendSettings.profiles) && backendSettings.profiles.some((p: ApiProfile) => p.apiKey && p.apiKey.trim())
-  if (localHasApiKey && !backendHasApiKey) {
+  const backendProfiles = Array.isArray(backendSettings.profiles) ? backendSettings.profiles as ApiProfile[] : []
+  const backendHasApiKey = backendProfiles.some(p => p.apiKey && p.apiKey.trim())
+  if (!backendHasApiKey) {
     return localSettings
+  }
+  if (localHasApiKey) {
+    const merged = normalizeSettings({
+      ...localSettings,
+      profiles: localSettings.profiles.map((lp) => {
+        const backendMatch = backendProfiles.find(bp => bp.id === lp.id)
+        if (backendMatch && backendMatch.apiKey && backendMatch.apiKey.trim() && (!lp.apiKey || !lp.apiKey.trim())) {
+          return { ...lp, apiKey: backendMatch.apiKey }
+        }
+        return lp
+      }),
+    })
+    return merged
   }
   const merged = normalizeSettings({
     ...backendSettings,
-    profiles: Array.isArray(backendSettings.profiles)
-      ? backendSettings.profiles.map((bp: ApiProfile) => {
+    profiles: backendProfiles.length > 0
+      ? backendProfiles.map((bp) => {
           const localMatch = localSettings.profiles.find(lp => lp.id === bp.id)
           if (localMatch && localMatch.apiKey && localMatch.apiKey.trim() && (!bp.apiKey || !bp.apiKey.trim())) {
             return { ...bp, apiKey: localMatch.apiKey }
@@ -610,12 +625,18 @@ export const useStore = create<AppState>()(
           }
           try {
             const adminSettings = await getApiSettings(result.token)
+            console.log('[login] getApiSettings response:', JSON.stringify(adminSettings)?.slice(0, 200))
             if (adminSettings && typeof adminSettings === 'object') {
               const backendSettings = adminSettings as Partial<AppSettings>
               if (backendSettings.profiles && Array.isArray(backendSettings.profiles) && backendSettings.profiles.length > 0) {
                 const merged = mergeBackendSettings(get().settings, backendSettings)
+                console.log('[login] merged profiles:', merged.profiles.map(p => ({ id: p.id, name: p.name, hasApiKey: !!p.apiKey })))
                 get().setSettings(merged)
+              } else {
+                console.log('[login] backend has no valid profiles, skipping merge')
               }
+            } else {
+              console.log('[login] adminSettings is null or not object:', adminSettings)
             }
           } catch (err) {
             console.error('Failed to load admin API settings:', err)
@@ -745,12 +766,18 @@ export const useStore = create<AppState>()(
           }
           try {
             const adminSettings = await getApiSettings(token)
+            console.log('[refresh] getApiSettings response:', JSON.stringify(adminSettings)?.slice(0, 200))
             if (adminSettings && typeof adminSettings === 'object') {
               const backendSettings = adminSettings as Partial<AppSettings>
               if (backendSettings.profiles && Array.isArray(backendSettings.profiles) && backendSettings.profiles.length > 0) {
                 const merged = mergeBackendSettings(get().settings, backendSettings)
+                console.log('[refresh] merged profiles:', merged.profiles.map(p => ({ id: p.id, name: p.name, hasApiKey: !!p.apiKey })))
                 get().setSettings(merged)
+              } else {
+                console.log('[refresh] backend has no valid profiles, skipping merge')
               }
+            } else {
+              console.log('[refresh] adminSettings is null or not object:', adminSettings)
             }
           } catch (err) {
             console.error('Failed to load admin API settings:', err)
@@ -811,6 +838,13 @@ export const useStore = create<AppState>()(
       setSettings: (s) => set((st) => {
         const previous = normalizeSettings(st.settings)
         const incoming = s as Partial<AppSettings>
+        const prevActiveProfile = previous.profiles.find(p => p.id === previous.activeProfileId)
+        console.log('[setSettings] prev active:', previous.activeProfileId, 'apiKey:', prevActiveProfile?.apiKey ? prevActiveProfile.apiKey.slice(0, 8) + '...' : '(empty)')
+        console.log('[setSettings] incoming keys:', Object.keys(incoming).join(','))
+        if (incoming.profiles) {
+          const incActiveProfile = (incoming.profiles as ApiProfile[]).find(p => p.id === incoming.activeProfileId)
+          console.log('[setSettings] incoming active:', incoming.activeProfileId, 'apiKey:', incActiveProfile?.apiKey ? incActiveProfile.apiKey.slice(0, 8) + '...' : '(empty)')
+        }
         const hasLegacyOverrides =
           incoming.baseUrl !== undefined ||
           incoming.apiKey !== undefined ||
@@ -837,6 +871,15 @@ export const useStore = create<AppState>()(
           )
         }
         const settings = normalizeSettings(merged)
+        const prevActive = previous.profiles.find(p => p.id === previous.activeProfileId)
+        const newActive = settings.profiles.find(p => p.id === settings.activeProfileId)
+        if (prevActive && prevActive.apiKey && prevActive.apiKey.trim() && (!newActive || !newActive.apiKey || !newActive.apiKey.trim())) {
+          console.log('[setSettings] PROTECT: preserving apiKey from previous active profile')
+          settings.profiles = settings.profiles.map(p =>
+            p.id === settings.activeProfileId ? { ...p, apiKey: prevActive.apiKey } : p
+          )
+          settings.apiKey = prevActive.apiKey
+        }
         const shouldClearReusedProfile = st.reusedTaskApiProfileId && settings.activeProfileId === st.reusedTaskApiProfileId
         return {
           settings,

@@ -116,15 +116,21 @@ export async function deleteUser(token: string, username: string): Promise<void>
 }
 
 export async function getApiSettings(token: string): Promise<unknown | null> {
-  const response = await fetch(getAuthApiUrl('/api/admin/settings/api'), {
+  const url = getAuthApiUrl('/api/admin/settings/api')
+  console.log('[getApiSettings] fetching:', url)
+  const response = await fetch(url, {
     headers: createSessionHeaders(token),
   })
+  console.log('[getApiSettings] status:', response.status)
   const result = await parseJsonResponse<{ settings: unknown | null }>(response)
+  console.log('[getApiSettings] result.settings type:', typeof result.settings, 'has profiles:', !!(result.settings && (result.settings as Record<string, unknown>).profiles))
   return result.settings
 }
 
 export async function setApiSettings(token: string, settings: unknown): Promise<void> {
-  const response = await fetch(getAuthApiUrl('/api/admin/settings/api'), {
+  const url = getAuthApiUrl('/api/admin/settings/api')
+  console.log('[setApiSettings] saving to:', url, 'has profiles:', !!(settings && (settings as Record<string, unknown>).profiles))
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -132,6 +138,7 @@ export async function setApiSettings(token: string, settings: unknown): Promise<
     },
     body: JSON.stringify(settings),
   })
+  console.log('[setApiSettings] status:', response.status)
   await parseJsonResponse<{ success: boolean }>(response)
 }
 
