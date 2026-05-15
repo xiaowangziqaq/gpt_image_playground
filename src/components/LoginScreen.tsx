@@ -6,8 +6,8 @@ export default function LoginScreen() {
   const authLoading = useStore((s) => s.authLoading)
   const authError = useStore((s) => s.authError)
 
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('z199512j')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
