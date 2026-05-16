@@ -138,10 +138,7 @@ function collectReferencedImageIds(tasks: TaskRecord[], inputImages: InputImage[
 }
 
 async function loadUserDataFromBackend(token: string, options: { replaceLocal: boolean }) {
-  const [tasksResult, imagesResult] = await Promise.allSettled([
-    getTasks(token),
-    getImages(token),
-  ])
+  const [tasksResult] = await Promise.allSettled([getTasks(token)])
 
   if (options.replaceLocal) {
     await resetLocalUserData()
@@ -157,41 +154,6 @@ async function loadUserDataFromBackend(token: string, options: { replaceLocal: b
     }
   } else {
     console.error('Failed to load tasks from backend:', tasksResult.reason)
-  }
-
-  if (imagesResult.status === 'fulfilled') {
-    for (const backendImage of imagesResult.value) {
-      try {
-        const image = backendImage as BackendImageRecord
-        const width = typeof image.width === 'number' ? image.width : undefined
-        const height = typeof image.height === 'number' ? image.height : undefined
-
-        if (typeof image.dataUrl === 'string' && image.dataUrl) {
-          await putImage({
-            id: image.id,
-            dataUrl: image.dataUrl,
-            createdAt: typeof image.createdAt === 'number' ? image.createdAt : Date.now(),
-            source: image.source === 'upload' || image.source === 'generated' || image.source === 'mask' ? image.source : undefined,
-            width,
-            height,
-          })
-        }
-
-        if (typeof image.thumbnailDataUrl === 'string' && image.thumbnailDataUrl) {
-          await putImageThumbnail({
-            id: image.id,
-            thumbnailDataUrl: image.thumbnailDataUrl,
-            width,
-            height,
-            thumbnailVersion: CURRENT_THUMBNAIL_VERSION,
-          })
-        }
-      } catch (error) {
-        console.error('Failed to merge backend image:', error)
-      }
-    }
-  } else {
-    console.error('Failed to load images from backend:', imagesResult.reason)
   }
 
   const mergedTasks = await getAllTasks()
@@ -296,11 +258,7 @@ async function syncDeleteImageToBackend(imageId: string, token: string | null) {
 }
 
 async function deleteImageEverywhere(imageId: string) {
-  const token = useStore.getState().authToken
-  await Promise.allSettled([
-    deleteImage(imageId),
-    syncDeleteImageToBackend(imageId, token),
-  ])
+  await deleteImage(imageId)
   imageCache.delete(imageId)
   thumbnailCache.delete(imageId)
   thumbnailBackfillIds.delete(imageId)
@@ -332,14 +290,6 @@ async function storeImageWithSync(
   options: { awaitBackend?: boolean } = {},
 ): Promise<string> {
   const id = await storeImage(dataUrl, source)
-  const token = useStore.getState().authToken
-  if (token) {
-    const thumbnail = await getStoredFreshImageThumbnail(id)
-    const syncPromise = syncImageToBackend(id, dataUrl, source, thumbnail?.width, thumbnail?.height, token)
-    if (options.awaitBackend) {
-      await syncPromise
-    }
-  }
   return id
 }
 
