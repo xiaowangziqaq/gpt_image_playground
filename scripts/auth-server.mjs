@@ -235,7 +235,12 @@ function send(res, status, headers, body) {
 }
 
 function sendJson(res, status, payload) {
-  send(res, status, appendCors({ 'Content-Type': 'application/json; charset=utf-8' }), JSON.stringify(payload))
+  send(res, status, appendCors({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+  }), JSON.stringify(payload))
 }
 
 function sendError(res, status, message) {

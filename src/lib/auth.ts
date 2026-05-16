@@ -69,6 +69,7 @@ export async function fetchCurrentUser(token: string): Promise<AuthUser> {
 export async function fetchUsers(token: string): Promise<AuthUser[]> {
   const response = await fetch(getAuthApiUrl('/api/admin/users'), {
     headers: createSessionHeaders(token),
+    cache: 'no-store',
   })
   const payload = await parseJsonResponse<{ users: AuthUser[] }>(response)
   return payload.users

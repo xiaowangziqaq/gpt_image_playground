@@ -898,6 +898,11 @@ export const useStore = create<AppState>()(
         }))
         try {
           await get().refreshManagedUsers()
+          set((state) => ({
+            managedUsers: state.managedUsers.some((user) => user.username === created.username)
+              ? state.managedUsers
+              : [...state.managedUsers, created],
+          }))
         } catch (error) {
           get().showToast(error instanceof Error ? `用户已创建，但列表刷新失败：${error.message}` : '用户已创建，但列表刷新失败', 'error')
         }
