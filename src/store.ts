@@ -890,8 +890,17 @@ export const useStore = create<AppState>()(
       createManagedUser: async (payload) => {
         const token = get().authToken
         if (!token) throw new Error('请先登录')
-        await createManagedUser(token, payload)
-        await get().refreshManagedUsers()
+        const created = await createManagedUser(token, payload)
+        set((state) => ({
+          managedUsers: state.managedUsers.some((user) => user.username === created.username)
+            ? state.managedUsers.map((user) => user.username === created.username ? created : user)
+            : [...state.managedUsers, created],
+        }))
+        try {
+          await get().refreshManagedUsers()
+        } catch (error) {
+          get().showToast(error instanceof Error ? `用户已创建，但列表刷新失败：${error.message}` : '用户已创建，但列表刷新失败', 'error')
+        }
       },
       updateManagedUser: async (username, payload) => {
         const token = get().authToken

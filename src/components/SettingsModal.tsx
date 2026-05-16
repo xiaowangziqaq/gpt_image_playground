@@ -1665,6 +1665,7 @@ export default function SettingsModal() {
                                 password: newUserForm.password,
                                 remainingGenerations: Number(newUserForm.remainingGenerations) || 0,
                               })
+                              showToast('用户创建成功', 'success')
                               setNewUserForm({ username: '', password: '', remainingGenerations: '10' })
                             } catch (err) {
                               console.error('Failed to create user:', err)
