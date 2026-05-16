@@ -920,7 +920,17 @@ export const useStore = create<AppState>()(
         const token = get().authToken
         if (!token) throw new Error('请先登录')
         await deleteManagedUser(token, username)
-        await get().refreshManagedUsers()
+        set((state) => ({
+          managedUsers: state.managedUsers.filter((user) => user.username !== username),
+        }))
+        try {
+          await get().refreshManagedUsers()
+          set((state) => ({
+            managedUsers: state.managedUsers.filter((user) => user.username !== username),
+          }))
+        } catch (error) {
+          get().showToast(error instanceof Error ? `用户已删除，但列表刷新失败：${error.message}` : '用户已删除，但列表刷新失败', 'error')
+        }
       },
 
       // Settings

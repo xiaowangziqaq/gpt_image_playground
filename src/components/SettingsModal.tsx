@@ -1767,6 +1767,7 @@ export default function SettingsModal() {
                                   try {
                                     setUserActionLoading(user.username)
                                     await deleteManagedUser(user.username)
+                                    showToast('用户删除成功', 'success')
                                   } catch (err) {
                                     console.error('Failed to delete user:', err)
                                   } finally {
