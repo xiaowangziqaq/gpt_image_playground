@@ -92,6 +92,7 @@ describe('mask draft lifecycle in store actions', () => {
       confirmDialog: null,
       showToast: vi.fn(),
       setConfirmDialog: vi.fn(),
+      currentUser: { username: 'test', role: 'admin', remainingGenerations: null, successfulGenerations: 0, disabled: false, createdAt: 1, updatedAt: 1 },
     })
   })
 

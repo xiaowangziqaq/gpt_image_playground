@@ -617,6 +617,9 @@ export const useStore = create<AppState>()(
             authLoading: false,
             authInitialized: true,
             authError: null,
+            prompt: '',
+            inputImages: [],
+            maskDraft: null,
           })
           if (result.user.role === 'admin') {
             await get().refreshManagedUsers()
