@@ -15,6 +15,37 @@ const dbPath = join(dataDir, 'auth.db')
 const SESSION_HEADER_NAME = 'X-Playground-Session'
 const SESSION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000
 const TOKEN_BYTES = 32
+const DEFAULT_ADMIN_PASSWORD = process.env.AUTH_DEFAULT_ADMIN_PASSWORD || crypto.randomBytes(18).toString('base64url')
+const DEFAULT_SINGLE_API_SETTINGS = {
+  baseUrl: 'https://code1.ciyuanapi.xyz/v1',
+  apiKey: '',
+  model: 'gpt-image-2',
+  timeout: 600,
+  apiMode: 'images',
+  codexCli: false,
+  apiProxy: false,
+  customProviders: [],
+  clearInputAfterSubmit: true,
+  persistInputOnRestart: true,
+  reuseTaskApiProfileTemporarily: false,
+  alwaysShowRetryButton: false,
+  enterSubmit: false,
+  activeProfileId: 'gpt-single',
+  profiles: [
+    {
+      id: 'gpt-single',
+      name: 'GPT',
+      provider: 'openai',
+      baseUrl: 'https://code1.ciyuanapi.xyz/v1',
+      apiKey: '',
+      model: 'gpt-image-2',
+      timeout: 600,
+      apiMode: 'images',
+      codexCli: false,
+      apiProxy: false,
+    },
+  ],
+}
 
 let db = null
 
@@ -95,11 +126,24 @@ function initializeDatabase() {
   saveDatabase()
 }
 
+function ensureDefaultApiSettings() {
+  const result = db.exec(`SELECT value FROM admin_settings WHERE key = 'api_settings'`)
+  if (result.length > 0 && result[0].values.length > 0) return
+
+  const now = Date.now()
+  db.run(
+    `INSERT INTO admin_settings (key, value, updated_at) VALUES (?, ?, ?)`,
+    ['api_settings', JSON.stringify(DEFAULT_SINGLE_API_SETTINGS), now]
+  )
+  saveDatabase()
+  console.log('[auth] Created default API settings')
+}
+
 function initializeDefaultAdmin() {
   const result = db.exec("SELECT username FROM users WHERE username = 'admin'")
   if (result.length === 0 || result[0].values.length === 0) {
     const salt = crypto.randomBytes(16).toString('hex')
-    const passwordHash = hashPassword('z199512j', salt)
+    const passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD, salt)
     const now = Date.now()
     db.run(
       `INSERT INTO users (username, password_hash, password_salt, role, remaining_generations, successful_generations, disabled, created_at, updated_at)
@@ -107,8 +151,10 @@ function initializeDefaultAdmin() {
       ['admin', passwordHash, salt, now, now]
     )
     saveDatabase()
-    console.log('[auth] Created default admin user: admin / z199512j')
+    console.log(`[auth] Created default admin user: admin / ${DEFAULT_ADMIN_PASSWORD}`)
   }
+
+  ensureDefaultApiSettings()
 }
 
 function cleanExpiredSessions() {
@@ -124,6 +170,63 @@ function appendCors(headers) {
     'Access-Control-Allow-Headers': `${SESSION_HEADER_NAME}, Content-Type`,
     'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
   }
+}
+
+function readStoredAdminSettings() {
+  const result = db.exec(`SELECT value FROM admin_settings WHERE key = 'api_settings'`)
+  if (result.length === 0 || result[0].values.length === 0) return null
+  try {
+    return JSON.parse(result[0].values[0][0])
+  } catch {
+    return null
+  }
+}
+
+function normalizeSyncVersion(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function mergeAdminApiSettingsPreservingSecrets(existingSettings, incomingSettings) {
+  if (!incomingSettings || typeof incomingSettings !== 'object') return incomingSettings
+  if (!existingSettings || typeof existingSettings !== 'object') return incomingSettings
+
+  const existingProfiles = Array.isArray(existingSettings.profiles) ? existingSettings.profiles : []
+  const incomingProfiles = Array.isArray(incomingSettings.profiles) ? incomingSettings.profiles : []
+  if (incomingProfiles.length === 0) return incomingSettings
+
+  return {
+    ...incomingSettings,
+    profiles: incomingProfiles.map((profile) => {
+      if (!profile || typeof profile !== 'object') return profile
+      const existingProfile = existingProfiles.find((item) => item && item.id === profile.id)
+      if (
+        existingProfile &&
+        typeof existingProfile.apiKey === 'string' &&
+        existingProfile.apiKey.trim() &&
+        (!profile.apiKey || (typeof profile.apiKey === 'string' && !profile.apiKey.trim()))
+      ) {
+        return { ...profile, apiKey: existingProfile.apiKey }
+      }
+      return profile
+    }),
+  }
+}
+
+function shouldReplaceStoredTask(existingTask, nextTask) {
+  if (!existingTask || typeof existingTask !== 'object') return true
+  const existingVersion = normalizeSyncVersion(existingTask.__syncVersion)
+  const nextVersion = normalizeSyncVersion(nextTask?.__syncVersion)
+  if (nextVersion !== existingVersion) return nextVersion > existingVersion
+
+  const existingFinishedAt = typeof existingTask.finishedAt === 'number' ? existingTask.finishedAt : 0
+  const nextFinishedAt = typeof nextTask?.finishedAt === 'number' ? nextTask.finishedAt : 0
+  if (nextFinishedAt !== existingFinishedAt) return nextFinishedAt > existingFinishedAt
+
+  const existingOutputCount = Array.isArray(existingTask.outputImages) ? existingTask.outputImages.length : 0
+  const nextOutputCount = Array.isArray(nextTask?.outputImages) ? nextTask.outputImages.length : 0
+  if (nextOutputCount !== existingOutputCount) return nextOutputCount > existingOutputCount
+
+  return true
 }
 
 function send(res, status, headers, body) {
@@ -566,18 +669,12 @@ async function handleGetApiSettings(req, res) {
     return
   }
 
-  const result = db.exec(`SELECT value FROM admin_settings WHERE key = 'api_settings'`)
-  if (result.length === 0 || result[0].values.length === 0) {
+  const settings = readStoredAdminSettings()
+  if (!settings) {
     sendJson(res, 200, { settings: null })
     return
   }
-
-  try {
-    const settings = JSON.parse(result[0].values[0][0])
-    sendJson(res, 200, { settings })
-  } catch {
-    sendJson(res, 200, { settings: null })
-  }
+  sendJson(res, 200, { settings })
 }
 
 async function handleSetApiSettings(req, res) {
@@ -593,22 +690,7 @@ async function handleSetApiSettings(req, res) {
     return
   }
 
-  const { json } = await readBody(req)
-  if (!json || typeof json !== 'object') {
-    sendError(res, 400, 'Invalid request body')
-    return
-  }
-
-  const now = Date.now()
-  const value = JSON.stringify(json)
-  
-  db.run(
-    `INSERT OR REPLACE INTO admin_settings (key, value, updated_at) VALUES (?, ?, ?)`,
-    ['api_settings', value, now]
-  )
-  saveDatabase()
-
-  sendJson(res, 200, { success: true })
+  sendError(res, 405, 'API settings are read-only. Update admin_settings.api_settings in the database directly.')
 }
 
 async function handleSaveTask(req, res) {
@@ -634,6 +716,22 @@ async function handleSaveTask(req, res) {
   if (!taskId || typeof taskId !== 'string') {
     sendError(res, 400, 'Task ID is required')
     return
+  }
+
+  const existingResult = db.exec(
+    `SELECT task_data FROM tasks WHERE id = ? AND username = ?`,
+    [taskId, session.username]
+  )
+  if (existingResult.length > 0 && existingResult[0].values.length > 0) {
+    try {
+      const existingTask = JSON.parse(existingResult[0].values[0][0])
+      if (!shouldReplaceStoredTask(existingTask, json)) {
+        sendJson(res, 200, { success: true, id: taskId, skipped: true })
+        return
+      }
+    } catch (error) {
+      console.error('Failed to parse existing task data:', error)
+    }
   }
 
   const now = Date.now()

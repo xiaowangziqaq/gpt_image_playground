@@ -44,7 +44,6 @@ import {
   logoutSession,
   updateUser as updateManagedUser,
   getApiSettings,
-  setApiSettings,
   saveTask,
   getTasks,
   deleteTask as deleteBackendTask,
@@ -59,6 +58,148 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
+
+let pendingBackendSyncCount = 0
+let pendingBackendSyncBeforeUnloadAttached = false
+const pendingBackendSyncPromises = new Set<Promise<unknown>>()
+const taskBackendSyncChains = new Map<string, Promise<void>>()
+let backendSyncVersionSeed = 0
+
+type BackendImageRecord = {
+  id: string
+  dataUrl?: string | null
+  thumbnailDataUrl?: string | null
+  source?: string | null
+  width?: number | null
+  height?: number | null
+  createdAt?: number | null
+}
+
+function ensurePendingBackendSyncBeforeUnloadWarning() {
+  if (pendingBackendSyncBeforeUnloadAttached || typeof window === 'undefined') return
+  window.addEventListener('beforeunload', (event) => {
+    if (pendingBackendSyncCount <= 0) return
+    event.preventDefault()
+    event.returnValue = ''
+  })
+  pendingBackendSyncBeforeUnloadAttached = true
+}
+
+function trackPendingBackendSync<T>(promise: Promise<T>): Promise<T> {
+  pendingBackendSyncCount += 1
+  const trackedPromise = promise.finally(() => {
+    pendingBackendSyncCount = Math.max(0, pendingBackendSyncCount - 1)
+    pendingBackendSyncPromises.delete(trackedPromise)
+  })
+  pendingBackendSyncPromises.add(trackedPromise)
+  return trackedPromise
+}
+
+function nextBackendSyncVersion() {
+  const now = Date.now()
+  backendSyncVersionSeed = Math.max(now, backendSyncVersionSeed + 1)
+  return backendSyncVersionSeed
+}
+
+async function waitForOutstandingBackendSyncs(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const outstanding = [
+      ...pendingBackendSyncPromises,
+      ...taskBackendSyncChains.values(),
+    ]
+    if (outstanding.length === 0) return
+    await Promise.allSettled(outstanding)
+  }
+}
+
+function clearLocalImageCaches() {
+  imageCache.clear()
+  thumbnailCache.clear()
+  thumbnailBackfillIds.clear()
+  thumbnailBackfillRunningIds.clear()
+  thumbnailBackfillScheduled = false
+}
+
+async function resetLocalUserData() {
+  await Promise.all([dbClearTasks(), clearImages()])
+  clearLocalImageCaches()
+}
+
+function collectReferencedImageIds(tasks: TaskRecord[], inputImages: InputImage[] = []) {
+  const referencedIds = new Set<string>()
+  for (const image of inputImages) referencedIds.add(image.id)
+  for (const task of tasks) {
+    for (const id of task.inputImageIds || []) referencedIds.add(id)
+    if (task.maskImageId) referencedIds.add(task.maskImageId)
+    for (const id of task.outputImages || []) referencedIds.add(id)
+  }
+  return Array.from(referencedIds)
+}
+
+async function loadUserDataFromBackend(token: string, options: { replaceLocal: boolean }) {
+  const [tasksResult, imagesResult] = await Promise.allSettled([
+    getTasks(token),
+    getImages(token),
+  ])
+
+  if (options.replaceLocal) {
+    await resetLocalUserData()
+  }
+
+  if (tasksResult.status === 'fulfilled') {
+    for (const backendTask of tasksResult.value) {
+      try {
+        await putTask(backendTask as TaskRecord)
+      } catch (error) {
+        console.error('Failed to merge backend task:', error)
+      }
+    }
+  } else {
+    console.error('Failed to load tasks from backend:', tasksResult.reason)
+  }
+
+  if (imagesResult.status === 'fulfilled') {
+    for (const backendImage of imagesResult.value) {
+      try {
+        const image = backendImage as BackendImageRecord
+        const width = typeof image.width === 'number' ? image.width : undefined
+        const height = typeof image.height === 'number' ? image.height : undefined
+
+        if (typeof image.dataUrl === 'string' && image.dataUrl) {
+          await putImage({
+            id: image.id,
+            dataUrl: image.dataUrl,
+            createdAt: typeof image.createdAt === 'number' ? image.createdAt : Date.now(),
+            source: image.source === 'upload' || image.source === 'generated' || image.source === 'mask' ? image.source : undefined,
+            width,
+            height,
+          })
+        }
+
+        if (typeof image.thumbnailDataUrl === 'string' && image.thumbnailDataUrl) {
+          await putImageThumbnail({
+            id: image.id,
+            thumbnailDataUrl: image.thumbnailDataUrl,
+            width,
+            height,
+            thumbnailVersion: CURRENT_THUMBNAIL_VERSION,
+          })
+        }
+      } catch (error) {
+        console.error('Failed to merge backend image:', error)
+      }
+    }
+  } else {
+    console.error('Failed to load images from backend:', imagesResult.reason)
+  }
+
+  const mergedTasks = await getAllTasks()
+  useStore.getState().setTasks(mergedTasks)
+  scheduleThumbnailBackfill(collectReferencedImageIds(mergedTasks, useStore.getState().inputImages))
+}
+
+ensurePendingBackendSyncBeforeUnloadWarning()
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl。只保留少量最近使用图片，避免大量 4K data URL 常驻内存。
@@ -86,25 +227,43 @@ function createOpenAITimeoutError(timeoutSeconds: number) {
 
 async function syncTaskToBackend(task: unknown, token: string | null) {
   if (!token) return
-  try {
-    await saveTask(token, task)
-  } catch (error) {
-    console.error('Failed to sync task to backend:', error)
+  if (!task || typeof task !== 'object' || !('id' in task) || typeof task.id !== 'string') return
+  const taskId = task.id
+  const payload = {
+    ...(task as Record<string, unknown>),
+    __syncVersion: nextBackendSyncVersion(),
   }
+  const previous = taskBackendSyncChains.get(taskId) ?? Promise.resolve()
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      try {
+        await trackPendingBackendSync(saveTask(token, payload))
+      } catch (error) {
+        console.error('Failed to sync task to backend:', error)
+      }
+    })
+  const trackedNext = next.finally(() => {
+    if (taskBackendSyncChains.get(taskId) === trackedNext) {
+      taskBackendSyncChains.delete(taskId)
+    }
+  })
+  taskBackendSyncChains.set(taskId, trackedNext)
+  await trackedNext
 }
 
 async function syncImageToBackend(imageId: string, dataUrl: string, source: string | undefined, width: number | undefined, height: number | undefined, token: string | null) {
   if (!token) return
   try {
     const thumbnail = await getStoredFreshImageThumbnail(imageId)
-    await saveImage(token, {
+    await trackPendingBackendSync(saveImage(token, {
       id: imageId,
       dataUrl,
       thumbnailDataUrl: thumbnail?.thumbnailDataUrl,
       source,
       width,
       height,
-    })
+    }))
   } catch (error) {
     console.error('Failed to sync image to backend:', error)
   }
@@ -113,7 +272,7 @@ async function syncImageToBackend(imageId: string, dataUrl: string, source: stri
 async function syncDeleteTaskToBackend(taskId: string, token: string | null) {
   if (!token) return
   try {
-    await deleteBackendTask(token, taskId)
+    await trackPendingBackendSync(deleteBackendTask(token, taskId))
   } catch (error) {
     console.error('Failed to sync task deletion to backend:', error)
   }
@@ -130,7 +289,7 @@ async function deleteTaskEverywhere(taskId: string) {
 async function syncDeleteImageToBackend(imageId: string, token: string | null) {
   if (!token) return
   try {
-    await deleteBackendImage(token, imageId)
+    await trackPendingBackendSync(deleteBackendImage(token, imageId))
   } catch (error) {
     console.error('Failed to sync image deletion to backend:', error)
   }
@@ -167,12 +326,19 @@ async function handleGenerationComplete() {
   }
 }
 
-async function storeImageWithSync(dataUrl: string, source: NonNullable<StoredImage['source']> = 'upload'): Promise<string> {
+async function storeImageWithSync(
+  dataUrl: string,
+  source: NonNullable<StoredImage['source']> = 'upload',
+  options: { awaitBackend?: boolean } = {},
+): Promise<string> {
   const id = await storeImage(dataUrl, source)
   const token = useStore.getState().authToken
   if (token) {
     const thumbnail = await getStoredFreshImageThumbnail(id)
-    syncImageToBackend(id, dataUrl, source, thumbnail?.width, thumbnail?.height, token)
+    const syncPromise = syncImageToBackend(id, dataUrl, source, thumbnail?.width, thumbnail?.height, token)
+    if (options.awaitBackend) {
+      await syncPromise
+    }
   }
   return id
 }
@@ -422,38 +588,16 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
 
 function mergeBackendSettings(localSettings: AppSettings, backendSettings: Partial<AppSettings>): AppSettings {
   if (!backendSettings || typeof backendSettings !== 'object') return localSettings
-  const localHasApiKey = localSettings.profiles.some(p => p.apiKey && p.apiKey.trim())
   const backendProfiles = Array.isArray(backendSettings.profiles) ? backendSettings.profiles as ApiProfile[] : []
-  const backendHasApiKey = backendProfiles.some(p => p.apiKey && p.apiKey.trim())
-  if (!backendHasApiKey) {
-    return localSettings
-  }
-  if (localHasApiKey) {
-    const merged = normalizeSettings({
-      ...localSettings,
-      profiles: localSettings.profiles.map((lp) => {
-        const backendMatch = backendProfiles.find(bp => bp.id === lp.id)
-        if (backendMatch && backendMatch.apiKey && backendMatch.apiKey.trim() && (!lp.apiKey || !lp.apiKey.trim())) {
-          return { ...lp, apiKey: backendMatch.apiKey }
-        }
-        return lp
-      }),
-    })
-    return merged
-  }
-  const merged = normalizeSettings({
+  if (backendProfiles.length === 0) return localSettings
+  return normalizeSettings({
+    ...localSettings,
     ...backendSettings,
-    profiles: backendProfiles.length > 0
-      ? backendProfiles.map((bp) => {
-          const localMatch = localSettings.profiles.find(lp => lp.id === bp.id)
-          if (localMatch && localMatch.apiKey && localMatch.apiKey.trim() && (!bp.apiKey || !bp.apiKey.trim())) {
-            return { ...bp, apiKey: localMatch.apiKey }
-          }
-          return bp
-        })
-      : localSettings.profiles,
+    profiles: backendProfiles,
+    activeProfileId: backendSettings.activeProfileId ?? backendProfiles[0].id,
+    customProviders: Array.isArray(backendSettings.customProviders) ? backendSettings.customProviders : [],
+    providerOrder: Array.isArray(backendSettings.providerOrder) ? backendSettings.providerOrder : undefined,
   })
-  return merged
 }
 
 export function getPersistedState(state: AppState) {
@@ -517,7 +661,7 @@ interface AppState {
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
-  saveAdminApiSettings: () => Promise<void>
+  saveAdminApiSettings: (settingsOverride?: AppSettings) => Promise<void>
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
@@ -628,78 +772,15 @@ export const useStore = create<AppState>()(
           }
           try {
             const adminSettings = await getApiSettings(result.token)
-            console.log('[login] getApiSettings response:', JSON.stringify(adminSettings)?.slice(0, 200))
             if (adminSettings && typeof adminSettings === 'object') {
-              const backendSettings = adminSettings as Partial<AppSettings>
-              if (backendSettings.profiles && Array.isArray(backendSettings.profiles) && backendSettings.profiles.length > 0) {
-                const merged = mergeBackendSettings(get().settings, backendSettings)
-                console.log('[login] merged profiles:', merged.profiles.map(p => ({ id: p.id, name: p.name, hasApiKey: !!p.apiKey })))
-                get().setSettings(merged)
-              } else {
-                console.log('[login] backend has no valid profiles, skipping merge')
-              }
-            } else {
-              console.log('[login] adminSettings is null or not object:', adminSettings)
+              get().setSettings(mergeBackendSettings(get().settings, adminSettings as Partial<AppSettings>))
             }
           } catch (err) {
-            console.error('Failed to load admin API settings:', err)
+            console.error('Failed to load API settings:', err)
           }
-          
-          // Clear IndexedDB before loading user data
+
           try {
-            await Promise.all([
-              dbClearTasks(),
-              clearImages(),
-            ])
-          } catch (err) {
-            console.error('Failed to clear IndexedDB:', err)
-          }
-          
-          // Load user's tasks and images from backend
-          try {
-            const [backendTasks, backendImages] = await Promise.all([
-              getTasks(result.token),
-              getImages(result.token),
-            ])
-            
-            // Merge tasks into IndexedDB
-            for (const task of backendTasks) {
-              try {
-                await putTask(task as TaskRecord)
-              } catch (err) {
-                console.error('Failed to merge task:', err)
-              }
-            }
-            
-            // Merge images into IndexedDB
-            for (const img of backendImages) {
-              try {
-                const image = img as { id: string; dataUrl: string; thumbnailDataUrl?: string; source?: string; width?: number; height?: number; createdAt?: number }
-                await putImage({
-                  id: image.id,
-                  dataUrl: image.dataUrl,
-                  createdAt: image.createdAt || Date.now(),
-                  source: image.source as 'upload' | 'generated' | 'mask' | undefined,
-                  width: image.width,
-                  height: image.height,
-                })
-                if (image.thumbnailDataUrl) {
-                  await putImageThumbnail({
-                    id: image.id,
-                    thumbnailDataUrl: image.thumbnailDataUrl,
-                    width: image.width,
-                    height: image.height,
-                    thumbnailVersion: CURRENT_THUMBNAIL_VERSION,
-                  })
-                }
-              } catch (err) {
-                console.error('Failed to merge image:', err)
-              }
-            }
-            
-            // Reload tasks from IndexedDB
-            const allTasks = await getAllTasks()
-            set({ tasks: allTasks })
+            await loadUserDataFromBackend(result.token, { replaceLocal: true })
           } catch (err) {
             console.error('Failed to load user data from backend:', err)
           }
@@ -717,13 +798,10 @@ export const useStore = create<AppState>()(
       },
       logout: async () => {
         const token = get().authToken
-        const currentUser = get().currentUser
-        if (token && currentUser?.role === 'admin') {
-          try {
-            await get().saveAdminApiSettings()
-          } catch (err) {
-            console.error('Failed to save admin API settings before logout:', err)
-          }
+        try {
+          await waitForOutstandingBackendSyncs()
+        } catch (err) {
+          console.error('Failed while waiting for backend syncs before logout:', err)
         }
         await logoutSession(token)
         set({
@@ -769,21 +847,16 @@ export const useStore = create<AppState>()(
           }
           try {
             const adminSettings = await getApiSettings(token)
-            console.log('[refresh] getApiSettings response:', JSON.stringify(adminSettings)?.slice(0, 200))
             if (adminSettings && typeof adminSettings === 'object') {
-              const backendSettings = adminSettings as Partial<AppSettings>
-              if (backendSettings.profiles && Array.isArray(backendSettings.profiles) && backendSettings.profiles.length > 0) {
-                const merged = mergeBackendSettings(get().settings, backendSettings)
-                console.log('[refresh] merged profiles:', merged.profiles.map(p => ({ id: p.id, name: p.name, hasApiKey: !!p.apiKey })))
-                get().setSettings(merged)
-              } else {
-                console.log('[refresh] backend has no valid profiles, skipping merge')
-              }
-            } else {
-              console.log('[refresh] adminSettings is null or not object:', adminSettings)
+              get().setSettings(mergeBackendSettings(get().settings, adminSettings as Partial<AppSettings>))
             }
           } catch (err) {
-            console.error('Failed to load admin API settings:', err)
+            console.error('Failed to load API settings:', err)
+          }
+          try {
+            await loadUserDataFromBackend(token, { replaceLocal: true })
+          } catch (err) {
+            console.error('Failed to refresh user data from backend:', err)
           }
         } catch (error) {
           await logoutSession(token)
@@ -841,13 +914,6 @@ export const useStore = create<AppState>()(
       setSettings: (s) => set((st) => {
         const previous = normalizeSettings(st.settings)
         const incoming = s as Partial<AppSettings>
-        const prevActiveProfile = previous.profiles.find(p => p.id === previous.activeProfileId)
-        console.log('[setSettings] prev active:', previous.activeProfileId, 'apiKey:', prevActiveProfile?.apiKey ? prevActiveProfile.apiKey.slice(0, 8) + '...' : '(empty)')
-        console.log('[setSettings] incoming keys:', Object.keys(incoming).join(','))
-        if (incoming.profiles) {
-          const incActiveProfile = (incoming.profiles as ApiProfile[]).find(p => p.id === incoming.activeProfileId)
-          console.log('[setSettings] incoming active:', incoming.activeProfileId, 'apiKey:', incActiveProfile?.apiKey ? incActiveProfile.apiKey.slice(0, 8) + '...' : '(empty)')
-        }
         const hasLegacyOverrides =
           incoming.baseUrl !== undefined ||
           incoming.apiKey !== undefined ||
@@ -877,7 +943,6 @@ export const useStore = create<AppState>()(
         const prevActive = previous.profiles.find(p => p.id === previous.activeProfileId)
         const newActive = settings.profiles.find(p => p.id === settings.activeProfileId)
         if (prevActive && prevActive.apiKey && prevActive.apiKey.trim() && (!newActive || !newActive.apiKey || !newActive.apiKey.trim())) {
-          console.log('[setSettings] PROTECT: preserving apiKey from previous active profile')
           settings.profiles = settings.profiles.map(p =>
             p.id === settings.activeProfileId ? { ...p, apiKey: prevActive.apiKey } : p
           )
@@ -891,18 +956,7 @@ export const useStore = create<AppState>()(
             : {}),
         }
       }),
-      saveAdminApiSettings: async () => {
-        const currentUser = get().currentUser
-        const token = get().authToken
-        if (!currentUser || currentUser.role !== 'admin' || !token) return
-        
-        try {
-          const settings = get().settings
-          await setApiSettings(token, settings)
-        } catch (err) {
-          console.error('Failed to save admin API settings:', err)
-        }
-      },
+      saveAdminApiSettings: async () => {},
       dismissedCodexCliPrompts: [],
       dismissCodexCliPrompt: (key) => set((st) => ({
         dismissedCodexCliPrompts: st.dismissedCodexCliPrompts.includes(key)
@@ -1406,7 +1460,7 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
   const actualParamsList = await resolveImageSizeParamsList(result.images, result.actualParamsList)
   const outputIds: string[] = []
   for (const dataUrl of result.images) {
-    const imgId = await storeImageWithSync(dataUrl, 'generated')
+    const imgId = await storeImageWithSync(dataUrl, 'generated', { awaitBackend: true })
     cacheImage(imgId, dataUrl)
     outputIds.push(imgId)
   }
@@ -1645,7 +1699,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([task, ...latestTasks])
   await putTask(task)
-  syncTaskToBackend(task, useStore.getState().authToken)
+  await syncTaskToBackend(task, useStore.getState().authToken)
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1731,7 +1785,7 @@ async function executeTask(taskId: string) {
     // 存储输出图片
     const outputIds: string[] = []
     for (const dataUrl of result.images) {
-      const imgId = await storeImageWithSync(dataUrl, 'generated')
+      const imgId = await storeImageWithSync(dataUrl, 'generated', { awaitBackend: true })
       cacheImage(imgId, dataUrl)
       outputIds.push(imgId)
     }
@@ -1889,7 +1943,7 @@ export async function retryTask(task: TaskRecord) {
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([newTask, ...latestTasks])
   await putTask(newTask)
-  syncTaskToBackend(newTask, useStore.getState().authToken)
+  await syncTaskToBackend(newTask, useStore.getState().authToken)
 
   executeTask(taskId)
 }
@@ -2119,7 +2173,7 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
   const actualParamsList = await readImageSizeParamsList(result.images)
   const outputIds: string[] = []
   for (const dataUrl of result.images) {
-    const imgId = await storeImageWithSync(dataUrl, 'generated')
+    const imgId = await storeImageWithSync(dataUrl, 'generated', { awaitBackend: true })
     cacheImage(imgId, dataUrl)
     outputIds.push(imgId)
   }

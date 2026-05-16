@@ -514,7 +514,7 @@ export default function SettingsModal() {
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
     if (isAdmin) {
-      void saveAdminApiSettings()
+      void saveAdminApiSettings(normalizedDraft)
     }
   }
 
@@ -1009,7 +1009,7 @@ export default function SettingsModal() {
         setDraft(nextDraft)
         setSettings(nextDraft)
         if (isAdmin) {
-          saveAdminApiSettings()
+          void saveAdminApiSettings(nextDraft)
         }
         setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
         setShowCustomProviderImport(false)
@@ -1215,10 +1215,13 @@ export default function SettingsModal() {
             
             {activeTab === 'api' && isAdmin && (
               <div className="space-y-4">
+                <div className="rounded-2xl bg-blue-50/70 p-4 border border-blue-100/80 dark:bg-blue-500/[0.06] dark:border-blue-400/10 text-sm text-blue-700 dark:text-blue-300">
+                  API 配置由服务器数据库统一管理，所有用户共用同一条配置。前端仅负责读取，不支持新增、删除或修改。
+                </div>
                 <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">当前配置</span>
-                    <span className="relative inline-flex">
+                    {false && <span className="relative inline-flex">
                       <button
                         type="button"
                         onClick={() => confirmCopyProfileImportUrl(activeProfile)}
@@ -1243,8 +1246,8 @@ export default function SettingsModal() {
                       <ViewportTooltip visible={profileImportUrlTooltipVisible} className="whitespace-nowrap">
                         复制导入 URL
                       </ViewportTooltip>
-                    </span>
-                    <span className="relative inline-flex">
+                    </span>}
+                    {false && <span className="relative inline-flex">
                       <button
                         type="button"
                         onClick={duplicateActiveProfile}
@@ -1269,7 +1272,7 @@ export default function SettingsModal() {
                       <ViewportTooltip visible={duplicateProfileTooltipVisible} className="whitespace-nowrap">
                         复制当前配置
                       </ViewportTooltip>
-                    </span>
+                    </span>}
                   </div>
                   <div ref={profileMenuRef} className="relative">
                     <button
@@ -1297,7 +1300,7 @@ export default function SettingsModal() {
                           className="absolute right-0 top-full z-50 mt-1.5 w-full overflow-hidden overflow-y-auto rounded-xl border border-gray-200/60 bg-white/95 py-1 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl animate-dropdown-down dark:border-white/[0.08] dark:bg-gray-900/95 dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] dark:ring-white/10 custom-scrollbar"
                           style={{ maxHeight: profileMenuMaxHeight }}
                         >
-                          <button
+                          {false && <button
                             type="button"
                             onClick={(e) => {
                               e.preventDefault()
@@ -1309,14 +1312,14 @@ export default function SettingsModal() {
                             <span className="flex h-5 w-5 shrink-0 items-center justify-center">
                               <PlusIcon className="h-4 w-4" />
                             </span>
-                          </button>
+                          </button>}
                           <div>
                             {draft.profiles.map(profile => (
                               <div
                                 key={profile.id}
                                 data-profile-id={profile.id}
                                 title={profile.name}
-                                draggable
+                                draggable={false}
                                 onDragStart={(e) => handleProfileDragStart(e, profile.id)}
                                 onDragOver={(e) => handleProfileDragOver(e, profile.id)}
                                 onDrop={(e) => handleProfileDrop(e, profile.id)}
@@ -1340,21 +1343,21 @@ export default function SettingsModal() {
                                   <div className="absolute -bottom-[1px] left-0 right-0 h-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
                                 )}
                                 <div className="flex min-w-0 flex-1 items-center gap-2 pr-2">
-                                  <div
+                                  {false && <div
                                     data-drag-handle
                                     className="flex cursor-grab active:cursor-grabbing items-center justify-center text-gray-400 opacity-60 transition-opacity hover:opacity-100 dark:text-gray-500"
                                     style={{ touchAction: 'none' }}
                                     title="拖拽排序"
                                   >
                                     <DragHandleIcon className="h-3.5 w-3.5" />
-                                  </div>
+                                  </div>}
                                   <span className="min-w-0 truncate">{profile.name}</span>
                                   <span className={`rounded px-1.5 py-0.5 text-[10px] shrink-0 ${profile.id === activeProfile.id ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
                                     {getApiProviderLabel(draft, profile.provider)}
                                   </span>
                                 </div>
                                 
-                                <div className="flex shrink-0 items-center gap-1">
+                                {false && <div className="flex shrink-0 items-center gap-1">
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -1386,7 +1389,7 @@ export default function SettingsModal() {
                                       <TrashIcon className="h-3.5 w-3.5" />
                                     </button>
                                   )}
-                                </div>
+                                </div>}
                               </div>
                             ))}
                           </div>
@@ -1400,10 +1403,9 @@ export default function SettingsModal() {
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">配置名称</span>
                 <input
                   value={activeProfile.name}
-                  onChange={(e) => updateActiveProfile({ name: e.target.value })}
-                  onBlur={(e) => commitActiveProfilePatch({ name: e.target.value })}
+                  readOnly
                   type="text"
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
 
@@ -1414,7 +1416,8 @@ export default function SettingsModal() {
                   onChange={handleProviderTypeChange}
                   onReorder={handleProviderReorder}
                   options={providerOptions}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  disabled
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </div>
 
@@ -1425,21 +1428,13 @@ export default function SettingsModal() {
                   </div>
                   <input
                     value={activeProfile.baseUrl}
-                    onChange={(e) => updateActiveProfile({ baseUrl: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
+                    readOnly
                     type="text"
-                    disabled={apiProxyEnabled}
                     placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl}
-                    className={`w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                   />
                   <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
-                    {apiProxyEnabled ? (
-                      <span className="text-yellow-600 dark:text-yellow-500">已开启代理，实际请求目标由部署端决定，此处设置被忽略。</span>
-                    ) : activeProfile.provider === 'fal' ? (
-                      <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时将作为 fal.ai 代理 URL。</span>
-                    ) : (
-                      <span>支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code></span>
-                    )}
+                    <span>由服务器数据库统一下发，修改请直接更新数据库中的 API 配置。</span>
                   </div>
                 </label>
               )}
@@ -1450,8 +1445,8 @@ export default function SettingsModal() {
                     <span className="block text-sm text-gray-600 dark:text-gray-300">Codex CLI 兼容模式</span>
                     <button
                       type="button"
-                      onClick={() => updateActiveProfile({ codexCli: !activeProfile.codexCli }, true)}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.codexCli ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      disabled
+                      className={`relative inline-flex h-4 w-7 cursor-not-allowed items-center rounded-full opacity-70 transition-colors ${activeProfile.codexCli ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
                       role="switch"
                       aria-checked={activeProfile.codexCli}
                       aria-label="Codex CLI 兼容模式"
@@ -1471,11 +1466,8 @@ export default function SettingsModal() {
                     <span className="block text-sm text-gray-600 dark:text-gray-300">API 代理</span>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (!apiProxyLocked) updateActiveProfile({ apiProxy: !activeProfile.apiProxy }, true)
-                      }}
-                      disabled={apiProxyLocked}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${apiProxyChecked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'} ${apiProxyLocked ? 'cursor-not-allowed opacity-70' : ''}`}
+                      disabled
+                      className={`relative inline-flex h-4 w-7 cursor-not-allowed items-center rounded-full opacity-70 transition-colors ${apiProxyChecked ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
                       role="switch"
                       aria-checked={apiProxyChecked}
                       aria-label="API 代理"
@@ -1494,11 +1486,10 @@ export default function SettingsModal() {
                 <div className="relative">
                   <input
                     value={activeProfile.apiKey}
-                    onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
+                    readOnly
                     type={showApiKey ? 'text' : 'password'}
                     placeholder={activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                   />
                   <button
                     type="button"
@@ -1522,7 +1513,7 @@ export default function SettingsModal() {
                   </button>
                 </div>
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  支持通过查询参数覆盖：<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiKey=</code>
+                  API Key 由服务器数据库统一下发，前端不支持修改。
                 </div>
               </div>
 
@@ -1531,22 +1522,16 @@ export default function SettingsModal() {
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API 接口</span>
                   <Select
                     value={activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode}
-                    onChange={(value) => {
-                      const apiMode = value as AppSettings['apiMode']
-                      const nextModel =
-                        activeProfile.model === DEFAULT_IMAGES_MODEL || activeProfile.model === DEFAULT_RESPONSES_MODEL
-                          ? getDefaultModelForMode(apiMode)
-                          : activeProfile.model
-                      updateActiveProfile({ apiMode, model: nextModel }, true)
-                    }}
+                    onChange={() => {}}
                     options={[
                       { label: 'Images API (/v1/images)', value: 'images' },
                       { label: 'Responses API (/v1/responses)', value: 'responses' },
                     ]}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    disabled
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                   />
                   <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=images</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">apiMode=responses</code>。
+                    API 接口模式由服务器数据库统一下发。
                   </div>
                 </div>
               )}
@@ -1557,11 +1542,10 @@ export default function SettingsModal() {
                 </span>
                 <input
                   value={activeProfile.model}
-                  onChange={(e) => updateActiveProfile({ model: e.target.value })}
-                  onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
+                  readOnly
                   type="text"
                   placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                   {activeProfile.provider === 'fal' ? (
@@ -1585,8 +1569,8 @@ export default function SettingsModal() {
                     <span className="block text-sm text-gray-600 dark:text-gray-300">返回 Base64 图片数据</span>
                     <button
                       type="button"
-                      onClick={() => updateActiveProfile({ responseFormatB64Json: !activeProfile.responseFormatB64Json }, true)}
-                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      disabled
+                      className={`relative inline-flex h-4 w-7 cursor-not-allowed items-center rounded-full opacity-70 transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
                       role="switch"
                       aria-checked={!!activeProfile.responseFormatB64Json}
                       aria-label="返回 Base64 图片数据"
@@ -1605,12 +1589,11 @@ export default function SettingsModal() {
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">请求超时 (秒)</span>
                   <input
                     value={timeoutInput}
-                    onChange={(e) => setTimeoutInput(e.target.value)}
-                    onBlur={commitTimeout}
+                    readOnly
                     type="number"
                     min={10}
                     max={600}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none opacity-70 cursor-not-allowed dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                   />
                 </label>
               )}
