@@ -287,6 +287,12 @@ export default function SettingsModal() {
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null)
 
+  useEffect(() => {
+    if (showSettings && currentUser?.role === 'admin') {
+      refreshManagedUsers()
+    }
+  }, [showSettings, currentUser?.role, refreshManagedUsers])
+
   const profileImportUrlTooltipTimerRef = useRef<number | null>(null)
   const duplicateProfileTooltipTimerRef = useRef<number | null>(null)
   const llmPromptTooltipTimerRef = useRef<number | null>(null)
