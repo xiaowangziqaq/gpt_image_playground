@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask } from '../store'
+import { useStore, ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail, updateTaskInStore, retryTask, getCachedImage } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_FAL_MODEL } from '../lib/apiProfiles'
@@ -155,9 +155,27 @@ export default function TaskCard({
     }
 
     if (imageId) {
+      const cachedImage = getCachedImage(imageId)
+      if (cachedImage) setThumbSrc(cachedImage)
+      else {
+        ensureImageCached(imageId).then((dataUrl) => {
+          if (!cancelled && dataUrl) setThumbSrc(dataUrl)
+        }).catch(() => {
+          // Best-effort fallback while thumbnail backfill catches up.
+        })
+      }
+
       unsubscribe = subscribeImageThumbnail(imageId, applyThumbnail)
       ensureImageThumbnailCached(imageId).then((thumbnail) => {
-        if (cancelled || !thumbnail) return
+        if (cancelled) return
+        if (!thumbnail) {
+          ensureImageCached(imageId).then((dataUrl) => {
+            if (!cancelled && dataUrl) setThumbSrc(dataUrl)
+          }).catch(() => {
+            // Leave the placeholder if neither thumbnail nor source image is available.
+          })
+          return
+        }
         applyThumbnail(thumbnail)
       }).catch(() => {
         if (!cancelled) setThumbSrc('')

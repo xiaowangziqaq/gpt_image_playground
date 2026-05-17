@@ -1,6 +1,6 @@
-import type { TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
+﻿import type { TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
 
-const DB_NAME = 'gpt-image-playground'
+const DB_NAME_PREFIX = 'gpt-image-playground'
 const DB_VERSION = 2
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
@@ -9,11 +9,30 @@ const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 2
 
+let storageNamespace = 'anonymous'
+
 export const CURRENT_THUMBNAIL_VERSION = THUMBNAIL_VERSION
+
+function sanitizeNamespace(namespace: string | null | undefined) {
+  const trimmed = namespace?.trim()
+  if (!trimmed) return 'anonymous'
+  return trimmed
+    .normalize('NFKC')
+    .replace(/[^\w\-.\u4e00-\u9fa5]+/g, '_')
+    .slice(0, 120) || 'anonymous'
+}
+
+export function setStorageNamespace(namespace: string | null | undefined) {
+  storageNamespace = sanitizeNamespace(namespace)
+}
+
+function getDbName() {
+  return `${DB_NAME_PREFIX}__${storageNamespace}`
+}
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
+    const req = indexedDB.open(getDbName(), DB_VERSION)
     req.onupgradeneeded = (e) => {
       const db = (e.target as IDBOpenDBRequest).result
       if (!db.objectStoreNames.contains(STORE_TASKS)) {
@@ -48,8 +67,6 @@ function dbTransaction<T>(
   )
 }
 
-// ===== Tasks =====
-
 export function getAllTasks(): Promise<TaskRecord[]> {
   return dbTransaction(STORE_TASKS, 'readonly', (s) => s.getAll())
 }
@@ -65,8 +82,6 @@ export function deleteTask(id: string): Promise<undefined> {
 export function clearTasks(): Promise<undefined> {
   return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.clear())
 }
-
-// ===== Images =====
 
 export function getImage(id: string): Promise<StoredImage | undefined> {
   return dbTransaction(STORE_IMAGES, 'readonly', (s) => s.get(id))
@@ -169,8 +184,6 @@ export function clearImages(): Promise<undefined> {
   )
 }
 
-// ===== Image hashing & dedup =====
-
 export async function hashDataUrl(dataUrl: string): Promise<string> {
   if (!globalThis.crypto?.subtle) {
     return hashDataUrlFallback(dataUrl)
@@ -198,14 +211,25 @@ function hashDataUrlFallback(dataUrl: string): string {
   return `fallback-${(h1 >>> 0).toString(16).padStart(8, '0')}${(h2 >>> 0).toString(16).padStart(8, '0')}`
 }
 
-/**
- * 存储图片，若已存在（按 hash 去重）则跳过。
- * 返回 image id。
- */
-export async function storeImage(dataUrl: string, source: NonNullable<StoredImage['source']> = 'upload'): Promise<string> {
+export async function storeImage(
+  dataUrl: string,
+  source: NonNullable<StoredImage['source']> = 'upload',
+  options: { deferThumbnail?: boolean } = {},
+): Promise<string> {
   const id = await hashDataUrl(dataUrl)
   const existing = await getImage(id)
+  const shouldDeferThumbnail = options.deferThumbnail === true
   if (!existing) {
+    if (shouldDeferThumbnail) {
+      await putImage({
+        id,
+        dataUrl,
+        createdAt: Date.now(),
+        source,
+      })
+      return id
+    }
+
     const thumbnail = await safeCreateImageThumbnail(dataUrl)
     await putImage({
       id,
@@ -224,7 +248,7 @@ export async function storeImage(dataUrl: string, source: NonNullable<StoredImag
         thumbnailVersion: THUMBNAIL_VERSION,
       })
     }
-  } else if ((await getStoredImageThumbnail(id))?.thumbnailVersion !== THUMBNAIL_VERSION) {
+  } else if (!shouldDeferThumbnail && (await getStoredImageThumbnail(id))?.thumbnailVersion !== THUMBNAIL_VERSION) {
     const thumbnail = await safeCreateImageThumbnail(existing.dataUrl)
     if (thumbnail.width && thumbnail.height && (existing.width !== thumbnail.width || existing.height !== thumbnail.height)) {
       await putImage({ ...existing, width: thumbnail.width, height: thumbnail.height })

@@ -4,53 +4,84 @@ import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_SETTINGS, 
 import type { StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 vi.mock('./lib/db', () => {
-  const tasks = new Map<string, TaskRecord>()
-  const images = new Map<string, StoredImage>()
-  const thumbnails = new Map<string, StoredImageThumbnail>()
+  const taskStores = new Map<string, Map<string, TaskRecord>>()
+  const imageStores = new Map<string, Map<string, StoredImage>>()
+  const thumbnailStores = new Map<string, Map<string, StoredImageThumbnail>>()
+  let namespace = 'anonymous'
   let imageSeq = 0
+
+  const getTaskStore = () => {
+    let store = taskStores.get(namespace)
+    if (!store) {
+      store = new Map<string, TaskRecord>()
+      taskStores.set(namespace, store)
+    }
+    return store
+  }
+
+  const getImageStore = () => {
+    let store = imageStores.get(namespace)
+    if (!store) {
+      store = new Map<string, StoredImage>()
+      imageStores.set(namespace, store)
+    }
+    return store
+  }
+
+  const getThumbnailStore = () => {
+    let store = thumbnailStores.get(namespace)
+    if (!store) {
+      store = new Map<string, StoredImageThumbnail>()
+      thumbnailStores.set(namespace, store)
+    }
+    return store
+  }
 
   return {
     CURRENT_THUMBNAIL_VERSION: 2,
-    getAllTasks: async () => [...tasks.values()],
+    setStorageNamespace: (value: string | null | undefined) => {
+      namespace = value?.trim() || 'anonymous'
+    },
+    getAllTasks: async () => [...getTaskStore().values()],
     putTask: async (task: TaskRecord) => {
-      tasks.set(task.id, task)
+      getTaskStore().set(task.id, task)
       return task.id
     },
     deleteTask: async (id: string) => {
-      tasks.delete(id)
+      getTaskStore().delete(id)
     },
     clearTasks: async () => {
-      tasks.clear()
+      getTaskStore().clear()
     },
-    getImage: async (id: string) => images.get(id),
-    getImageThumbnail: async (id: string) => thumbnails.get(id),
-    getStoredFreshImageThumbnail: async (id: string) => thumbnails.get(id),
-    getAllImageIds: async () => [...images.keys()],
-    getAllImages: async () => [...images.values()],
+    getImage: async (id: string) => getImageStore().get(id),
+    getImageThumbnail: async (id: string) => getThumbnailStore().get(id),
+    getStoredFreshImageThumbnail: async (id: string) => getThumbnailStore().get(id),
+    getAllImageIds: async () => [...getImageStore().keys()],
+    getAllImages: async () => [...getImageStore().values()],
     putImage: async (image: StoredImage) => {
-      images.set(image.id, image)
+      getImageStore().set(image.id, image)
       return image.id
     },
     putImageThumbnail: async (thumbnail: StoredImageThumbnail) => {
-      thumbnails.set(thumbnail.id, thumbnail)
+      getThumbnailStore().set(thumbnail.id, thumbnail)
       return thumbnail.id
     },
     deleteImage: async (id: string) => {
-      images.delete(id)
-      thumbnails.delete(id)
+      getImageStore().delete(id)
+      getThumbnailStore().delete(id)
     },
     clearImages: async () => {
-      images.clear()
-      thumbnails.clear()
+      getImageStore().clear()
+      getThumbnailStore().clear()
     },
     storeImage: async (dataUrl: string, source: StoredImage['source'] = 'upload') => {
       const id = `stored-image-${++imageSeq}`
-      images.set(id, { id, dataUrl, source, createdAt: Date.now() })
+      getImageStore().set(id, { id, dataUrl, source, createdAt: Date.now() })
       return id
     },
   }
 })
-import { clearImages, putImage } from './lib/db'
+import { clearImages, putImage, putTask, getAllTasks, setStorageNamespace } from './lib/db'
 import { editOutputs, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }

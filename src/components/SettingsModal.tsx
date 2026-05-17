@@ -1569,8 +1569,8 @@ export default function SettingsModal() {
                     <span className="block text-sm text-gray-600 dark:text-gray-300">返回 Base64 图片数据</span>
                     <button
                       type="button"
-                      disabled
-                      className={`relative inline-flex h-4 w-7 cursor-not-allowed items-center rounded-full opacity-70 transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                      onClick={() => commitActiveProfilePatch({ responseFormatB64Json: activeProfile.responseFormatB64Json ? undefined : true })}
+                      className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${activeProfile.responseFormatB64Json ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`}
                       role="switch"
                       aria-checked={!!activeProfile.responseFormatB64Json}
                       aria-label="返回 Base64 图片数据"
