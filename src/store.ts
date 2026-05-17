@@ -46,7 +46,6 @@ import {
   updateUser as updateManagedUser,
   getApiSettings,
   decrementGenerations,
-  getTasks,
 } from './lib/auth'
 import type { StoredImage } from './types'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -100,23 +99,6 @@ async function switchLocalUserStorage(username: string | null | undefined, optio
     nextState.maskDraft = null
   }
   useStore.setState(nextState)
-
-  const token = useStore.getState().authToken
-  if (token) {
-    try {
-      const backendTasks = await getTasks(token)
-      for (const task of backendTasks) {
-        try {
-          await putTask(task as TaskRecord)
-        } catch (e) {
-          console.error('Failed to merge backend task:', e)
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load tasks from backend:', e)
-    }
-  }
-
   await loadLocalUserData()
 }
 
