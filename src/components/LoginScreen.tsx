@@ -77,18 +77,18 @@ export default function LoginScreen() {
 
                 <div className="flex gap-3">
                   <button
+                    type="button"
+                    onClick={() => setShowQrCode(true)}
+                    className="flex-1 rounded-2xl border border-white/30 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
+                  >
+                    注册
+                  </button>
+                  <button
                     type="submit"
                     disabled={authLoading}
                     className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {authLoading ? '登录中...' : '登录'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowQrCode(true)}
-                    className="flex-1 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
-                  >
-                    注册
                   </button>
                 </div>
               </form>
