@@ -30,6 +30,7 @@ import {
   deleteImage,
   clearImages,
   storeImage,
+  setStorageNamespace,
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
@@ -44,74 +45,14 @@ import {
   logoutSession,
   updateUser as updateManagedUser,
   getApiSettings,
-  saveTask,
-  getTasks,
-  deleteTask as deleteBackendTask,
-  saveImage,
-  getImages,
-  getImage as getBackendImage,
-  deleteImage as deleteBackendImage,
   decrementGenerations,
+  getTasks,
 } from './lib/auth'
 import type { StoredImage } from './types'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-
-let pendingBackendSyncCount = 0
-let pendingBackendSyncBeforeUnloadAttached = false
-const pendingBackendSyncPromises = new Set<Promise<unknown>>()
-const taskBackendSyncChains = new Map<string, Promise<void>>()
-let backendSyncVersionSeed = 0
-
-type BackendImageRecord = {
-  id: string
-  dataUrl?: string | null
-  thumbnailDataUrl?: string | null
-  source?: string | null
-  width?: number | null
-  height?: number | null
-  createdAt?: number | null
-}
-
-function ensurePendingBackendSyncBeforeUnloadWarning() {
-  if (pendingBackendSyncBeforeUnloadAttached || typeof window === 'undefined') return
-  window.addEventListener('beforeunload', (event) => {
-    if (pendingBackendSyncCount <= 0) return
-    event.preventDefault()
-    event.returnValue = ''
-  })
-  pendingBackendSyncBeforeUnloadAttached = true
-}
-
-function trackPendingBackendSync<T>(promise: Promise<T>): Promise<T> {
-  pendingBackendSyncCount += 1
-  const trackedPromise = promise.finally(() => {
-    pendingBackendSyncCount = Math.max(0, pendingBackendSyncCount - 1)
-    pendingBackendSyncPromises.delete(trackedPromise)
-  })
-  pendingBackendSyncPromises.add(trackedPromise)
-  return trackedPromise
-}
-
-function nextBackendSyncVersion() {
-  const now = Date.now()
-  backendSyncVersionSeed = Math.max(now, backendSyncVersionSeed + 1)
-  return backendSyncVersionSeed
-}
-
-async function waitForOutstandingBackendSyncs(timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const outstanding = [
-      ...pendingBackendSyncPromises,
-      ...taskBackendSyncChains.values(),
-    ]
-    if (outstanding.length === 0) return
-    await Promise.allSettled(outstanding)
-  }
-}
 
 function clearLocalImageCaches() {
   imageCache.clear()
@@ -137,31 +78,47 @@ function collectReferencedImageIds(tasks: TaskRecord[], inputImages: InputImage[
   return Array.from(referencedIds)
 }
 
-async function loadUserDataFromBackend(token: string, options: { replaceLocal: boolean }) {
-  const [tasksResult] = await Promise.allSettled([getTasks(token)])
-
-  if (options.replaceLocal) {
-    await resetLocalUserData()
-  }
-
-  if (tasksResult.status === 'fulfilled') {
-    for (const backendTask of tasksResult.value) {
-      try {
-        await putTask(backendTask as TaskRecord)
-      } catch (error) {
-        console.error('Failed to merge backend task:', error)
-      }
-    }
-  } else {
-    console.error('Failed to load tasks from backend:', tasksResult.reason)
-  }
-
-  const mergedTasks = await getAllTasks()
-  useStore.getState().setTasks(mergedTasks)
-  scheduleThumbnailBackfill(collectReferencedImageIds(mergedTasks, useStore.getState().inputImages))
+async function loadLocalUserData() {
+  const tasks = await getAllTasks()
+  useStore.getState().setTasks(tasks)
+  scheduleThumbnailBackfill(collectReferencedImageIds(tasks, useStore.getState().inputImages))
 }
 
-ensurePendingBackendSyncBeforeUnloadWarning()
+async function switchLocalUserStorage(username: string | null | undefined, options: { resetInputState?: boolean } = {}) {
+  setStorageNamespace(username)
+  clearLocalImageCaches()
+  const nextState: Partial<AppState> = {
+    tasks: [],
+    detailTaskId: null,
+    lightboxImageId: null,
+    lightboxImageList: [],
+    selectedTaskIds: [],
+  }
+  if (options.resetInputState) {
+    nextState.prompt = ''
+    nextState.inputImages = []
+    nextState.maskDraft = null
+  }
+  useStore.setState(nextState)
+
+  const token = useStore.getState().authToken
+  if (token) {
+    try {
+      const backendTasks = await getTasks(token)
+      for (const task of backendTasks) {
+        try {
+          await putTask(task as TaskRecord)
+        } catch (e) {
+          console.error('Failed to merge backend task:', e)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load tasks from backend:', e)
+    }
+  }
+
+  await loadLocalUserData()
+}
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl。只保留少量最近使用图片，避免大量 4K data URL 常驻内存。
@@ -187,74 +144,8 @@ function createOpenAITimeoutError(timeoutSeconds: number) {
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。`
 }
 
-async function syncTaskToBackend(task: unknown, token: string | null) {
-  if (!token) return
-  if (!task || typeof task !== 'object' || !('id' in task) || typeof task.id !== 'string') return
-  const taskId = task.id
-  const payload = {
-    ...(task as Record<string, unknown>),
-    __syncVersion: nextBackendSyncVersion(),
-  }
-  const previous = taskBackendSyncChains.get(taskId) ?? Promise.resolve()
-  const next = previous
-    .catch(() => {})
-    .then(async () => {
-      try {
-        await trackPendingBackendSync(saveTask(token, payload))
-      } catch (error) {
-        console.error('Failed to sync task to backend:', error)
-      }
-    })
-  const trackedNext = next.finally(() => {
-    if (taskBackendSyncChains.get(taskId) === trackedNext) {
-      taskBackendSyncChains.delete(taskId)
-    }
-  })
-  taskBackendSyncChains.set(taskId, trackedNext)
-  await trackedNext
-}
-
-async function syncImageToBackend(imageId: string, dataUrl: string, source: string | undefined, width: number | undefined, height: number | undefined, token: string | null) {
-  if (!token) return
-  try {
-    const thumbnail = await getStoredFreshImageThumbnail(imageId)
-    await trackPendingBackendSync(saveImage(token, {
-      id: imageId,
-      dataUrl,
-      thumbnailDataUrl: thumbnail?.thumbnailDataUrl,
-      source,
-      width,
-      height,
-    }))
-  } catch (error) {
-    console.error('Failed to sync image to backend:', error)
-  }
-}
-
-async function syncDeleteTaskToBackend(taskId: string, token: string | null) {
-  if (!token) return
-  try {
-    await trackPendingBackendSync(deleteBackendTask(token, taskId))
-  } catch (error) {
-    console.error('Failed to sync task deletion to backend:', error)
-  }
-}
-
 async function deleteTaskEverywhere(taskId: string) {
-  const token = useStore.getState().authToken
-  await Promise.allSettled([
-    dbDeleteTask(taskId),
-    syncDeleteTaskToBackend(taskId, token),
-  ])
-}
-
-async function syncDeleteImageToBackend(imageId: string, token: string | null) {
-  if (!token) return
-  try {
-    await trackPendingBackendSync(deleteBackendImage(token, imageId))
-  } catch (error) {
-    console.error('Failed to sync image deletion to backend:', error)
-  }
+  await dbDeleteTask(taskId)
 }
 
 async function deleteImageEverywhere(imageId: string) {
@@ -289,7 +180,10 @@ async function storeImageWithSync(
   source: NonNullable<StoredImage['source']> = 'upload',
   options: { awaitBackend?: boolean } = {},
 ): Promise<string> {
-  const id = await storeImage(dataUrl, source)
+  void options
+  const id = await storeImage(dataUrl, source, { deferThumbnail: true })
+  cacheImage(id, dataUrl)
+  scheduleThumbnailBackfill([id], source === 'generated' ? 'visible' : 'background')
   return id
 }
 
@@ -730,9 +624,9 @@ export const useStore = create<AppState>()(
           }
 
           try {
-            await loadUserDataFromBackend(result.token, { replaceLocal: true })
+            await switchLocalUserStorage(result.user.username, { resetInputState: true })
           } catch (err) {
-            console.error('Failed to load user data from backend:', err)
+            console.error('Failed to load local user data:', err)
           }
         } catch (error) {
           set({
@@ -749,9 +643,9 @@ export const useStore = create<AppState>()(
       logout: async () => {
         const token = get().authToken
         try {
-          await waitForOutstandingBackendSyncs()
+          await switchLocalUserStorage(null, { resetInputState: true })
         } catch (err) {
-          console.error('Failed while waiting for backend syncs before logout:', err)
+          console.error('Failed to switch local storage during logout:', err)
         }
         await logoutSession(token)
         set({
@@ -804,9 +698,9 @@ export const useStore = create<AppState>()(
             console.error('Failed to load API settings:', err)
           }
           try {
-            await loadUserDataFromBackend(token, { replaceLocal: true })
+            await switchLocalUserStorage(user.username)
           } catch (err) {
-            console.error('Failed to refresh user data from backend:', err)
+            console.error('Failed to switch local user storage:', err)
           }
         } catch (error) {
           await logoutSession(token)
@@ -1490,6 +1384,7 @@ async function recoverFalTask(taskId: string) {
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
 export async function initStore() {
+  setStorageNamespace(null)
   await useStore.getState().refreshCurrentUser()
   const storedTasks = await getAllTasks()
   const { tasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
@@ -1673,7 +1568,6 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([task, ...latestTasks])
   await putTask(task)
-  await syncTaskToBackend(task, useStore.getState().authToken)
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -1885,7 +1779,6 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   const task = updated.find((t) => t.id === taskId)
   if (task) {
     putTask(task)
-    syncTaskToBackend(task, useStore.getState().authToken)
   }
 }
 
@@ -1917,7 +1810,6 @@ export async function retryTask(task: TaskRecord) {
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([newTask, ...latestTasks])
   await putTask(newTask)
-  await syncTaskToBackend(newTask, useStore.getState().authToken)
 
   executeTask(taskId)
 }
