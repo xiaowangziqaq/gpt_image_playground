@@ -1,5 +1,6 @@
-﻿import { useState } from 'react'
+import { useState } from 'react'
 import loginBackground from '../../upload/背景图.png'
+import wechatQrCode from '../../upload/微信二维码.png'
 import { useStore } from '../store'
 
 export default function LoginScreen() {
@@ -10,6 +11,7 @@ export default function LoginScreen() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
+  const [showQrCode, setShowQrCode] = useState(false)
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -73,18 +75,63 @@ export default function LoginScreen() {
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  disabled={authLoading}
-                  className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {authLoading ? '登录中...' : '登录'}
-                </button>
+                <div className="flex gap-3">
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {authLoading ? '登录中...' : '登录'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowQrCode(true)}
+                    className="flex-1 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                  >
+                    注册
+                  </button>
+                </div>
               </form>
+
+              <p className="mt-4 text-center text-xs text-white/60">
+                注册需扫码添加管理员微信，由管理员创建账号
+              </p>
             </div>
           </section>
         </div>
       </div>
+
+      {showQrCode && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setShowQrCode(false)}
+        >
+          <div
+            className="relative max-w-sm overflow-hidden rounded-3xl bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowQrCode(false)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600"
+            >
+              <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <h3 className="mb-4 text-center text-lg font-semibold text-slate-900">
+              扫码添加管理员微信
+            </h3>
+            <img
+              src={wechatQrCode}
+              alt="微信二维码"
+              className="mx-auto max-h-80 w-auto"
+            />
+            <p className="mt-4 text-center text-sm text-slate-500">
+              添加后由管理员为您创建账号
+            </p>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
